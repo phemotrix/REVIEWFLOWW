@@ -1,0 +1,9 @@
+# Optional: only needed if you deploy with the Wrangler CLI.
+# If you paste worker.js into the Cloudflare dashboard instead, ignore this file.
+name = "nfc-review"
+main = "worker.js"
+compatibility_date = "2026-01-01"
+
+[[kv_namespaces]]
+binding = "BUSINESS_CONFIGS"
+id = "PASTE_KV_NAMESPACE_ID_HERE"

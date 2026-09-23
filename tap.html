@@ -1,0 +1,397 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Share your experience</title>
+<meta name="theme-color" content="#0d0b08">
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon.svg">
+<style>
+:root{
+  --brand:#d8a94e;
+  --bg:#0d0b08;
+  --card:rgba(255,255,255,.045);
+  --text:#f5efe4;
+  --muted:#a89f8d;
+}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+body{
+  margin:0;color:var(--text);
+  background:radial-gradient(1200px 600px at 50% -10%, #241c10 0%, var(--bg) 55%) fixed, var(--bg);
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Inter,Arial,sans-serif;
+  min-height:100vh;
+}
+#app{max-width:480px;margin:0 auto;padding:28px 20px 44px;min-height:100vh;display:flex}
+.screen{display:none;width:100%;flex-direction:column;justify-content:center;animation:fade .35s ease}
+.screen.active{display:flex}
+@keyframes fade{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
+.brandmark{
+  width:56px;height:56px;border-radius:17px;flex:none;
+  background:linear-gradient(135deg,var(--brand),#8a5f1c);
+  display:flex;align-items:center;justify-content:center;font-size:27px;
+  box-shadow:0 8px 30px rgba(216,169,78,.28);margin-bottom:20px;
+}
+h1{font-size:30px;margin:0 0 10px;letter-spacing:-.5px;line-height:1.2}
+.sub{color:var(--muted);font-size:16px;line-height:1.55;margin:0 0 30px}
+.tiny{color:var(--muted);font-size:13px;margin-top:18px;text-align:center}
+.btn{
+  background:linear-gradient(135deg,var(--brand),#b57f2a);color:#1a1206;border:0;
+  border-radius:16px;padding:16px;font-size:17px;font-weight:700;width:100%;cursor:pointer;
+  box-shadow:0 10px 30px rgba(216,169,78,.25);
+}
+.btn:active{transform:scale(.98)}
+.btn.ghost{background:var(--card);color:var(--text);box-shadow:none;border:1px solid rgba(255,255,255,.09);margin-top:12px}
+.hidden{display:none!important}
+.progress{height:6px;background:rgba(255,255,255,.08);border-radius:99px;overflow:hidden;margin-bottom:14px}
+.progress-fill{height:100%;width:0;background:linear-gradient(90deg,var(--brand),#f3d08a);border-radius:99px;transition:width .4s ease}
+.qcount{color:var(--muted);font-size:12px;margin-bottom:10px;letter-spacing:1.5px;text-transform:uppercase}
+.qtext{font-size:24px;line-height:1.35;margin:0 0 24px;letter-spacing:-.3px}
+#qcard.slide{animation:slidein .3s ease}
+@keyframes slidein{from{opacity:0;transform:translateX(24px)}to{opacity:1;transform:none}}
+.emojis{display:flex;justify-content:space-between;gap:8px}
+.emoji{
+  flex:1;font-size:32px;background:var(--card);border:1px solid rgba(255,255,255,.07);
+  border-radius:16px;padding:14px 0;cursor:pointer;transition:transform .15s,border-color .15s;
+}
+.emoji.sel{border-color:var(--brand);background:rgba(216,169,78,.14);transform:scale(1.07)}
+.emoji-labels{display:flex;justify-content:space-between;color:var(--muted);font-size:12px;margin-top:10px;padding:0 4px}
+.chips{display:flex;flex-wrap:wrap;gap:10px}
+.chip{
+  background:var(--card);border:1px solid rgba(255,255,255,.09);color:var(--text);
+  border-radius:99px;padding:13px 19px;font-size:15px;cursor:pointer;transition:all .15s;
+}
+.chip.sel{background:rgba(216,169,78,.16);border-color:var(--brand);color:#ffe9bd}
+#qcontinue{margin-top:24px}
+textarea#reviewText{
+  width:100%;min-height:190px;background:var(--card);border:1px solid rgba(255,255,255,.1);
+  border-radius:16px;color:var(--text);font-size:16px;line-height:1.6;padding:16px;
+  font-family:inherit;resize:vertical;
+}
+.hint{color:var(--muted);font-size:13px;margin:10px 0 22px;line-height:1.5}
+h2.rtitle{font-size:24px;margin:0 0 14px;letter-spacing:-.3px}
+.pulse{font-size:52px;animation:pulse 1.4s ease-in-out infinite;text-align:center}
+@keyframes pulse{0%,100%{transform:scale(1);opacity:.7}50%{transform:scale(1.15);opacity:1}}
+.center{text-align:center}
+.bigcheck{
+  width:84px;height:84px;border-radius:50%;margin:0 auto 22px;flex:none;
+  background:linear-gradient(135deg,var(--brand),#8a5f1c);color:#1a1206;font-size:40px;
+  display:flex;align-items:center;justify-content:center;box-shadow:0 10px 34px rgba(216,169,78,.3);
+}
+.dots span{display:inline-block;animation:blink 1.2s infinite}
+.dots span:nth-child(2){animation-delay:.2s}.dots span:nth-child(3){animation-delay:.4s}
+@keyframes blink{0%,100%{opacity:.2}50%{opacity:1}}
+</style>
+</head>
+<body>
+<div id="app">
+
+  <!-- LOADING -->
+  <section id="screen-loading" class="screen active">
+    <div class="pulse">✦</div>
+    <p class="sub center" style="margin:18px 0 0">Loading…</p>
+  </section>
+
+  <!-- ERROR -->
+  <section id="screen-error" class="screen">
+    <div class="brandmark">✦</div>
+    <h1>Couldn't load this page</h1>
+    <p class="sub">This link may be old or mistyped. Ask the business for a fresh tap, or try again.</p>
+    <button class="btn" onclick="location.reload()">Try again</button>
+  </section>
+
+  <!-- WELCOME -->
+  <section id="screen-welcome" class="screen">
+    <div class="brandmark">✦</div>
+    <h1 id="bizName">Welcome</h1>
+    <p class="sub" id="welcomeText">Thanks for visiting!</p>
+    <button class="btn" onclick="startQuiz()">Start →</button>
+    <p class="tiny">Takes ~30 seconds · No sign-up needed</p>
+  </section>
+
+  <!-- QUIZ -->
+  <section id="screen-quiz" class="screen">
+    <div class="progress"><div class="progress-fill" id="progressFill"></div></div>
+    <div class="qcount" id="qcount"></div>
+    <div id="qcard"></div>
+    <button id="qcontinue" class="btn hidden">Continue →</button>
+  </section>
+
+  <!-- GENERATING -->
+  <section id="screen-generating" class="screen">
+    <div class="pulse">✦</div>
+    <p class="sub center dots" style="margin:20px 0 0">Drafting your review<span>.</span><span>.</span><span>.</span></p>
+  </section>
+
+  <!-- REVIEW -->
+  <section id="screen-review" class="screen">
+    <h2 class="rtitle">Your review is ready</h2>
+    <textarea id="reviewText"></textarea>
+    <p class="hint">Edit it however you like — it's your words. Then tap below: it copies the text and opens the business's Google review page.</p>
+    <button class="btn" onclick="copyAndOpen()">📋 Copy &amp; open Google reviews</button>
+    <button class="btn ghost" onclick="finishQuiz()">✨ Rewrite it</button>
+  </section>
+
+  <!-- DONE -->
+  <section id="screen-done" class="screen">
+    <div class="bigcheck">✓</div>
+    <h1 class="center">You're done — thank you!</h1>
+    <p class="sub center">Your review text is copied. Just paste it in the Google tab that opened and hit Post.</p>
+    <p class="tiny">No tab opened? Your text is still copied — open the business's Google page and paste it there.</p>
+  </section>
+
+</div>
+
+<script src="template-generator.js"></script>
+<script>
+/* ============================================================
+   NFC REVIEW TOOL — frontend
+   1. Deploy worker.js, then paste its URL below.
+   2. Upload this folder to GitHub Pages.
+   ============================================================ */
+var WORKER_URL = "PASTE_YOUR_WORKER_URL_HERE"; // e.g. https://nfc-review.yourname.workers.dev
+// tolerate a pasted URL with a trailing slash — the worker matches exact paths
+WORKER_URL = WORKER_URL.replace(/\/+$/, "");
+
+const DEMO_CONFIG = {
+  name: "Demo Café",
+  color: "#d8a94e",
+  welcome: "Thanks for stopping by! Tap through these quick questions — it takes about 30 seconds.",
+  google_link: "",
+  questions: v3DefaultQuestions()
+};
+
+const WRITE_OWN_LABEL = "Write your own words";
+
+let config = null, qi = 0, answers = {}, answersMeta = {};
+
+function $(id){ return document.getElementById(id); }
+function showScreen(id){
+  document.querySelectorAll(".screen").forEach(s => s.classList.remove("active"));
+  $(id).classList.add("active");
+  window.scrollTo(0, 0);
+}
+function getBiz(){ return new URLSearchParams(location.search).get("biz"); }
+function workerReady(){ return WORKER_URL.indexOf("PASTE_") !== 0; }
+
+async function boot(){
+  try{
+    if("serviceWorker" in navigator){ navigator.serviceWorker.register("sw.js").catch(function(){}); }
+    const biz = getBiz();
+    if(!biz){
+      config = DEMO_CONFIG; // preview mode, no ?biz= in URL
+    } else {
+      if(!workerReady()) throw new Error("worker url not set");
+      const r = await fetch(WORKER_URL + "/config?biz=" + encodeURIComponent(biz));
+      if(!r.ok) throw new Error("bad config");
+      config = await r.json();
+    }
+    if(!config.questions || !config.questions.length) throw new Error("no questions");
+    document.documentElement.style.setProperty("--brand", config.color || "#d8a94e");
+    $("bizName").textContent = config.name || "Welcome";
+    document.title = "Review " + (config.name || "");
+    $("welcomeText").textContent = config.welcome || "Thanks for visiting! It takes 30 seconds.";
+    showScreen("screen-welcome");
+  }catch(e){
+    showScreen("screen-error");
+  }
+}
+
+function startQuiz(){
+  qi = 0; answers = {}; answersMeta = {};
+  renderQuestion();
+  showScreen("screen-quiz");
+}
+
+const EMOJIS = ["😞", "😐", "🙂", "😄", "🤩"];
+const EMOJI_LABELS = ["Poor", "Okay", "Good", "Great", "Amazing"];
+
+function renderQuestion(){
+  const q = config.questions[qi];
+  $("qcount").textContent = (qi + 1) + " of " + config.questions.length;
+  $("progressFill").style.width = (qi / config.questions.length * 100) + "%";
+  const card = $("qcard");
+  card.innerHTML = "";
+  const contBtn = $("qcontinue");
+  contBtn.classList.add("hidden");
+  contBtn.onclick = null;
+
+  const h = document.createElement("h2");
+  h.className = "qtext";
+  h.textContent = q.text;
+  card.appendChild(h);
+
+  if(q.type === "choice"){
+    // v3: single-tap chips, no emojis, plus "Write your own words"
+    const wrap = document.createElement("div");
+    wrap.className = "chips";
+    (q.options || []).forEach(function(opt){
+      const b = document.createElement("button");
+      b.className = "chip";
+      b.textContent = opt;
+      b.onclick = function(){
+        answers[q.id] = opt;
+        answersMeta[q.id] = "preset";
+        Array.prototype.forEach.call(wrap.children, function(x){ x.classList.remove("sel"); });
+        b.classList.add("sel");
+        setTimeout(next, 380);
+      };
+      wrap.appendChild(b);
+    });
+    const own = document.createElement("button");
+    own.className = "chip";
+    own.style.borderStyle = "dashed";
+    own.textContent = WRITE_OWN_LABEL;
+    own.onclick = function(){ showOwnComposer(q); };
+    wrap.appendChild(own);
+    card.appendChild(wrap);
+  } else if(q.type === "rating"){
+    // legacy v2 emoji ratings (old published configs)
+    const row = document.createElement("div");
+    row.className = "emojis";
+    EMOJIS.forEach(function(e, i){
+      const b = document.createElement("button");
+      b.className = "emoji";
+      b.textContent = e;
+      b.setAttribute("aria-label", EMOJI_LABELS[i]);
+      b.onclick = function(){
+        answers[q.id] = i + 1;
+        Array.prototype.forEach.call(row.children, function(x){ x.classList.remove("sel"); });
+        b.classList.add("sel");
+        setTimeout(next, 380);
+      };
+      row.appendChild(b);
+    });
+    card.appendChild(row);
+    const labels = document.createElement("div");
+    labels.className = "emoji-labels";
+    labels.innerHTML = "<span>" + EMOJI_LABELS[0] + "</span><span>" + EMOJI_LABELS[4] + "</span>";
+    card.appendChild(labels);
+  } else {
+    // legacy v2 chips
+    const wrap = document.createElement("div");
+    wrap.className = "chips";
+    const selected = new Set();
+    (q.options || []).forEach(function(opt){
+      const b = document.createElement("button");
+      b.className = "chip";
+      b.textContent = opt;
+      b.onclick = function(){
+        if(q.multi){
+          if(selected.has(opt)){ selected.delete(opt); } else { selected.add(opt); }
+          b.classList.toggle("sel");
+          contBtn.classList.toggle("hidden", selected.size === 0);
+        } else {
+          answers[q.id] = opt;
+          Array.prototype.forEach.call(wrap.children, function(x){ x.classList.remove("sel"); });
+          b.classList.add("sel");
+          setTimeout(next, 380);
+        }
+      };
+      wrap.appendChild(b);
+    });
+    card.appendChild(wrap);
+    if(q.multi){
+      contBtn.onclick = function(){ answers[q.id] = Array.from(selected); next(); };
+    }
+  }
+  card.classList.remove("slide");
+  void card.offsetWidth;
+  card.classList.add("slide");
+}
+
+function showOwnComposer(q){
+  const card = $("qcard");
+  card.innerHTML = "";
+  const h = document.createElement("h2");
+  h.className = "qtext";
+  h.textContent = q.text;
+  card.appendChild(h);
+  const ta = document.createElement("textarea");
+  ta.id = "ownWords";
+  ta.placeholder = "Type it in your own words…";
+  ta.style.minHeight = "110px";
+  card.appendChild(ta);
+  const use = document.createElement("button");
+  use.className = "btn";
+  use.style.marginTop = "14px";
+  use.textContent = "Use these words →";
+  use.onclick = function(){
+    const t = ta.value.trim();
+    if(!t){ ta.focus(); return; }
+    answers[q.id] = t;
+    answersMeta[q.id] = "own";
+    next();
+  };
+  card.appendChild(use);
+  const back = document.createElement("button");
+  back.className = "btn ghost";
+  back.textContent = "← Back to options";
+  back.onclick = function(){ renderQuestion(); };
+  card.appendChild(back);
+  setTimeout(function(){ ta.focus(); }, 350);
+  card.classList.remove("slide");
+  void card.offsetWidth;
+  card.classList.add("slide");
+}
+
+function next(){
+  $("progressFill").style.width = ((qi + 1) / config.questions.length * 100) + "%";
+  qi++;
+  if(qi < config.questions.length){ renderQuestion(); }
+  else { finishQuiz(); }
+}
+
+async function finishQuiz(){
+  showScreen("screen-generating");
+  // v3: local generator is the reliable core — always ready, never blocks.
+  let text = "";
+  try{
+    text = generateTemplateReview(config.name, config.questions, answers, answersMeta) || "";
+  }catch(e){ text = ""; }
+  // Groq polishes on top. Bounded wait, silent fallback to the local draft.
+  if(workerReady()){
+    try{
+      const ctrl = new AbortController();
+      const to = setTimeout(function(){ ctrl.abort(); }, 6000);
+      const r = await fetch(WORKER_URL + "/generate-review", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ business_name: config.name, questions: config.questions, answers: answers }),
+        signal: ctrl.signal
+      });
+      clearTimeout(to);
+      const d = await r.json();
+      if(d && typeof d.review === "string" && !d.use_fallback){
+        const polished = d.review.trim().replace(/^[“"']+|[”"']+$/g, "");
+        if(polished.length > 30) text = polished;
+      }
+    }catch(e){ /* silently keep the local draft */ }
+  }
+  if(!text) text = "Had a great time here — would definitely recommend it.";
+  $("reviewText").value = text;
+  // small beat so the "drafting" animation feels real
+  setTimeout(function(){ showScreen("screen-review"); }, 600);
+}
+
+async function copyAndOpen(){
+  const text = $("reviewText").value.trim();
+  try{
+    await navigator.clipboard.writeText(text);
+  }catch(e){
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    document.body.appendChild(ta);
+    ta.select();
+    try{ document.execCommand("copy"); }catch(_){}
+    ta.remove();
+  }
+  const link = config.google_link;
+  if(link && link.indexOf("http") === 0){ window.open(link, "_blank", "noopener"); }
+  showScreen("screen-done");
+}
+
+window.addEventListener("DOMContentLoaded", boot);
+</script>
+</body>
+</html>
