@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Share your experience</title>
 <meta name="theme-color" content="#0d0b08">
-<link rel="manifest" href="manifest.json">
+<!-- No manifest link: the customer tap page must NOT offer installing the admin app. -->
 <link rel="icon" href="icon.svg">
 <style>
 :root{
@@ -149,7 +149,14 @@ h2.rtitle{font-size:24px;margin:0 0 14px;letter-spacing:-.3px}
    1. Deploy worker.js, then paste its URL below.
    2. Upload this folder to GitHub Pages.
    ============================================================ */
+/* The worker URL normally arrives as ?w= in the tap link (the admin app
+   appends it when you copy the link). You can also paste it below as a
+   fallback for hand-made links. */
 var WORKER_URL = "PASTE_YOUR_WORKER_URL_HERE"; // e.g. https://nfc-review.yourname.workers.dev
+try {
+  var _w = new URLSearchParams(location.search).get("w");
+  if(_w) WORKER_URL = _w;
+} catch(e){}
 // tolerate a pasted URL with a trailing slash — the worker matches exact paths
 WORKER_URL = WORKER_URL.replace(/\/+$/, "");
 
@@ -176,7 +183,7 @@ function workerReady(){ return WORKER_URL.indexOf("PASTE_") !== 0; }
 
 async function boot(){
   try{
-    if("serviceWorker" in navigator){ navigator.serviceWorker.register("sw.js").catch(function(){}); }
+    // No service-worker registration here: the tap page is not installable.
     const biz = getBiz();
     if(!biz){
       config = DEMO_CONFIG; // preview mode, no ?biz= in URL

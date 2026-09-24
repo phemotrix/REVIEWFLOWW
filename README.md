@@ -1,41 +1,53 @@
-# VORTRIX — NFC Tap-to-Review System v2
+# Reviewwflow V4 — NFC Tap-to-Review SaaS
 
-Two sides, two pages. Deploy the whole folder to GitHub Pages (or any static host).
+Mobile-first admin app + customer tap page + Cloudflare Worker backend.
 
-## YOUR SIDE — `index.html` (the admin tool, mobile-first)
+## What's in this zip
 
-Open this on your phone. Bottom nav: **Home · Clients · Cards · Map**.
-
-- **Home** — stats (clients, cards issued, pitched, bought, conversion %, monthly recurring), tap-system connection (Worker URL + admin password), backup export/import.
-- **Clients** — add/edit clients (name, category, phone, address, Google review link, monthly fee). Call / WhatsApp straight from the card. **Publish** pushes the client's review page live to your Cloudflare Worker. The link button copies the tap link to program on the NFC card.
-- **Cards** — NFC card inventory: code (VRTX-001…), assigned client, status (in stock / issued / lost). Copy the tap link per card when programming it.
-- **Map** — Mumbai split into 9 pitch zones (South Mumbai, Bandra·Khar, Andheri West, Powai·Andheri East, Dadar·Central, Ghatkopar·Vikhroli, Malad·Borivali, Thane·Mulund, Navi Mumbai). Flow per zone:
-  1. Open the zone → **Research businesses** — pulls real restaurants, cafes, salons, clinics, gyms, hotels & shops from OpenStreetMap around the zone. Tick the ones worth pitching (aim 50–70) → Add.
-  2. **Build route order** — uses your GPS as the start, optimizes the stop order (real road distances via OSRM, 2-opt) → stops numbered 1, 2, 3…
-  3. Work the route: per stop → Pitched / Bought / No + 1-line note, navigate button opens Google Maps to that stop. The Maps button opens the next 9 unvisited stops as one Google Maps route.
-  4. Progress bar + stats feed back to Home.
-- **Sectors** — Mumbai split into **100 micro-sectors** (T1 premium first, then T2, then T3; one sector = one pitch day). Flow per sector:
-  1. Open a sector → **🔍 Find businesses** — pulls real businesses from **live OSM data** (via Overpass, ~2 km radius). Tick the good ones → Add selected.
-  2. **🧭 Build route order** — GPS start, NN + 2-opt over OSRM road distances → stops numbered 1, 2, 3…
-  3. A **live 3D map** (MapLibre GL, pitched 3D buildings) shows every stop in route order with the route line. Same per-stop workflow: Pitched / Bought / No + note, per-stop Google Maps navigation, Maps button for the next 9 stops.
-  4. Honest by design: OSM has no Google review counts and coverage varies — the UI says so. Nothing is fabricated.
-
-All admin data lives in your browser's localStorage — use **Export** on Home for backups.
-
-## CUSTOMER SIDE — `tap.html` (NFC tap page)
-
-This is what opens when a customer taps a programmed NFC card. You never need to open it yourself. It reads `?biz=<client-slug>` → loads the business config from your Cloudflare Worker → 4 quick questions → AI-drafted review → copy & open Google reviews.
-
-## Backend — `worker.js`
-
-Cloudflare Worker (unchanged from v1): serves business configs from KV, generates reviews via Groq with offline fallback. Deploy per the old instructions, bind KV `BUSINESS_CONFIGS`, set secrets `GROQ_API_KEY` + `ADMIN_PASSWORD`, then paste the Worker URL into the admin app on Home.
-
-## Files
-
-| File | What |
+| File | What it is |
 |---|---|
-| `index.html` + `app.js` | Your admin tool (open this) |
-| `tap.html` + `template-generator.js` | Customer tap page (NFC cards point here) |
-| `worker.js` + `wrangler.toml` | Cloudflare backend |
-| `manifest.json`, `icon.svg`, `sw.js` | PWA bits for the tap page |
-| `_legacy/` | Old v1 admin + sales map (superseded, not deployed) |
+| `index.html` | **Admin app** — Home · Clients · Cards · Sectors · 📦 Packs |
+| `app.js` | Admin app logic |
+| `packs.js` | Embedded business packs (S001 Bandra West, 85 stops) |
+| `tap.html` | **Customer tap page** (NFC card opens this) |
+| `template-generator.js` | Local AI review writer (Groq is only a background polisher) |
+| `sw.js` / `manifest.json` / `icon-*.png` | PWA install support |
+| `worker.js` | Cloudflare Worker backend (hardened V4) |
+| `wrangler.toml` | Worker config |
+| `sector-data/*.json` | Offline fallback data |
+
+## Deploy — GitHub Pages (frontend)
+
+1. Upload **all files except `worker.js` / `wrangler.toml`** to the `REVIEWFLOWW` repo root (same way V3 was uploaded).
+2. Wait ~1 min → open `https://phemotrix.github.io/REVIEWFLOWW/` on the phone.
+3. If the phone cached the old version: close the tab fully and reopen (the V4 service worker auto-clears old caches on update).
+
+## Deploy — Cloudflare Worker (backend, REQUIRED for V4 security)
+
+The V4 worker strips the old debug info leak and adds rate limiting + input validation. Deploy it:
+
+1. `npx wrangler login` (one time)
+2. `npx wrangler deploy` from this folder
+3. Set secrets (never in files):
+   - `npx wrangler secret put ADMIN_KEY` → your admin password
+   - `npx wrangler secret put GROQ_KEY` → your Groq API key
+4. Create KV namespace `BUSINESS_CONFIGS` and bind it in `wrangler.toml` if starting fresh.
+
+## First run on the phone
+
+1. Open the app → **Home** → paste Worker URL + admin password → **Test connection** (must show green).
+2. **Sectors** → open any sector → paste the day's pack (from Muse) → **📥 Load pack** → **🧭 Build route order**.
+3. Or use the **📦 Packs** tab: paste once, **Save pack**, then **▶ Open route** any day.
+
+## Daily workflow
+
+1. Tell Muse the area: sector id (e.g. `S042`), "next area", or any Mumbai locality.
+2. Muse researches 70–80 high-end businesses (100–1000 Google reviews) and sends a pack block.
+3. Paste it in the **📦 Packs** tab → Save → Open route → pitch.
+
+## Security notes
+
+- Admin actions need `X-Admin-Key`; wrong keys get generic errors (no info leak).
+- Rate limits: 90 config/min, 10 reviews/10 min, 30 admin/min per IP (in-memory — for heavy use, add Cloudflare dashboard rate limiting).
+- Secrets live only in Cloudflare, never in these files.
+- Admin password: keep it strong and unique.

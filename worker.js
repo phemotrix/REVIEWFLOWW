@@ -1,184 +1,262 @@
-// ============================================================
-// NFC REVIEW TOOL — Cloudflare Worker backend
-// Deploy: paste this entire file into a new Cloudflare Worker,
-// bind a KV namespace called BUSINESS_CONFIGS, and set the
-// secrets GROQ_API_KEY and ADMIN_PASSWORD.
-// ============================================================
+/* Reviewwflow Cloudflare Worker — V4 hardened
+   Public endpoints:
+     GET  /config?biz=<slug>        → business config (public, needed by tap page)
+     POST /generate-review          → local-template review + optional Groq polish
+   Admin endpoints (X-Admin-Key required):
+     POST /admin/save               → publish business config
+     POST /admin/get                → fetch business config
+     GET  /admin/list               → list businesses
+   No debug endpoints. No stack traces. Rate limited per IP. */
 
 const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions";
-const GROQ_MODEL = "llama-3.1-8b-instant"; // fast + free tier
 
-const cors = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-  "Access-Control-Allow-Headers": "Content-Type, X-Admin-Key",
+/* ---------------- security: rate limiting (in-memory sliding window) ---- */
+const RL = new Map(); // key -> array of request timestamps (ms)
+function rateLimited(key, max, windowMs){
+  const now = Date.now();
+  let arr = RL.get(key) || [];
+  arr = arr.filter(function(t){ return now - t < windowMs; });
+  if(arr.length >= max){ RL.set(key, arr); return true; }
+  arr.push(now);
+  RL.set(key, arr);
+  if(RL.size > 4000){ RL.delete(RL.keys().next().value); } // opportunistic cleanup
+  return false;
+}
+function clientIp(req){
+  return req.headers.get("CF-Connecting-IP") ||
+         (req.headers.get("X-Forwarded-For")||"").split(",")[0].trim() ||
+         "unknown";
+}
+// Limits: config 90/min, generate-review 10/10min, admin 30/min per IP
+const LIMITS = {
+  config:   { max: 90, windowMs: 60 * 1000 },
+  generate: { max: 10, windowMs: 10 * 60 * 1000 },
+  admin:    { max: 30, windowMs: 60 * 1000 }
 };
 
-function json(data, status) {
+/* ---------------- security: input validation ---------------------------- */
+const BIZ_RE = /^[a-z0-9][a-z0-9-]{1,39}$/;
+function validBiz(b){ return typeof b === "string" && BIZ_RE.test(b); }
+function validGenerateBody(b){
+  if(!b || typeof b !== "object" || Array.isArray(b)) return false;
+  if(typeof b.business_name !== "string" || !b.business_name.trim() ||
+     b.business_name.length > 80) return false;
+  if(b.business_category !== undefined &&
+     (typeof b.business_category !== "string" || b.business_category.length > 40)) return false;
+  if(b.answers !== undefined){
+    if(!b.answers || typeof b.answers !== "object" || Array.isArray(b.answers)) return false;
+    const keys = Object.keys(b.answers);
+    if(keys.length > 12) return false;
+    for(const k of keys){
+      const v = b.answers[k];
+      if(typeof v !== "string" || v.length > 500) return false;
+    }
+  }
+  if(b.questions !== undefined){
+    if(!Array.isArray(b.questions) || b.questions.length > 15) return false;
+    for(const q of b.questions){
+      if(typeof q !== "string" || q.length > 200) return false;
+    }
+  }
+  return true;
+}
+
+/* ---------------- security: timing-safe secret compare ------------------ */
+function safeEqual(a, b){
+  a = String(a || ""); b = String(b || "");
+  if(a.length !== b.length) return false;
+  let d = 0;
+  for(let i = 0; i < a.length; i++) d |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return d === 0;
+}
+
+/* ---------------- response helpers -------------------------------------- */
+function json(data, status){
   return new Response(JSON.stringify(data), {
     status: status || 200,
-    headers: Object.assign({ "Content-Type": "application/json" }, cors),
-  });
-}
-
-function buildPrompt(businessName, questions, answers) {
-  const qmap = {};
-  questions.forEach(function (q) { qmap[q.id] = q; });
-  const lines = Object.keys(answers)
-    .map(function (id) {
-      const q = qmap[id];
-      if (!q) return null;
-      const a = answers[id];
-      let val = a;
-      if (q.type === "rating") val = a + " out of 5";
-      else if (Array.isArray(a)) val = a.join(", ");
-      return '- "' + q.text + '" → ' + val;
-    })
-    .filter(Boolean)
-    .join("\n");
-
-  return (
-    'Write a short, natural Google review in first person for a customer of "' +
-    businessName +
-    '".\n\nWhat the customer told us:\n' +
-    lines +
-    "\n\nRules:\n" +
-    "- 2 to 4 sentences, casual and genuine, like a real person wrote it on their phone.\n" +
-    "- Mention the business name once, naturally.\n" +
-    "- Base it ONLY on the answers above. Do not invent details that are not there.\n" +
-    "- Vary your wording; never repeat the same phrasing twice.\n" +
-    "- No emojis, no hashtags, no quotation marks around the review.\n" +
-    "- Output ONLY the review text, nothing else."
-  );
-}
-
-async function callGroq(env, prompt) {
-  const res = await fetch(GROQ_URL, {
-    method: "POST",
     headers: {
       "Content-Type": "application/json",
-      Authorization: "Bearer " + env.GROQ_API_KEY,
-    },
-    body: JSON.stringify({
-      model: GROQ_MODEL,
-      temperature: 0.9,
-      max_tokens: 220,
-      messages: [
-        {
-          role: "system",
-          content: "You write short, genuine customer reviews. Output only the review text.",
-        },
-        { role: "user", content: prompt },
-      ],
-    }),
+      "Access-Control-Allow-Origin": "*",
+      "X-Content-Type-Options": "nosniff"
+    }
   });
-  if (!res.ok) return null;
-  const data = await res.json();
-  const text =
-    data && data.choices && data.choices[0] && data.choices[0].message
-      ? (data.choices[0].message.content || "").trim()
-      : "";
-  return text || null;
+}
+function tooMany(){ return json({ ok:false, error:"Too many requests — slow down." }, 429); }
+
+function corsPreflight(){
+  return new Response(null, {
+    status: 204,
+    headers: {
+      "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+      "Access-Control-Allow-Headers": "Content-Type, X-Admin-Key",
+      "Access-Control-Max-Age": "86400"
+    }
+  });
 }
 
+/* ---------------- local review template (offline-safe core) -------------- */
+function localReview(d){
+  const name = (d.business_name || "this place").trim();
+  const cat = (d.business_category || "").trim();
+  const a = d.answers || {};
+  const pick = function(){
+    const vals = [];
+    for(const k in a){ if(a[k] && String(a[k]).trim()) vals.push(String(a[k]).trim()); }
+    return vals;
+  };
+  const bits = pick();
+  const catBit = cat ? (" " + cat.toLowerCase()) : "";
+  let text = "Had a great experience at " + name + ".";
+  if(bits.length){
+    text += " " + bits.slice(0, 4).join(" ");
+  } else {
+    text += " Good service, clean" + catBit + ", and a genuinely pleasant visit overall.";
+  }
+  text += " Staff were courteous and everything felt well managed.";
+  text += " Would happily recommend" + (cat ? " this " + cat.toLowerCase() : " it") + " to anyone nearby.";
+  return text;
+}
+
+/* ---------------- Groq polish (best-effort, bounded) ---------------------- */
+async function groqPolish(env, draft, d){
+  if(!env.GROQ_API_KEY) return draft;
+  const ctrl = new AbortController();
+  const timer = setTimeout(function(){ ctrl.abort(); }, 12000);
+  try{
+    const r = await fetch(GROQ_URL, {
+      method: "POST",
+      signal: ctrl.signal,
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": "Bearer " + env.GROQ_API_KEY
+      },
+      body: JSON.stringify({
+        model: "llama-3.1-8b-instant",
+        temperature: 0.7,
+        max_tokens: 220,
+        messages: [
+          { role: "system",
+            content: "Rewrite the draft as a natural, human Google review (40-90 words). " +
+                     "First person, specific, warm, no emojis, no hashtags, no fake claims. " +
+                     "Return ONLY the review text." },
+          { role: "user",
+            content: "Business: " + (d.business_name||"") +
+                     (d.business_category ? " (" + d.business_category + ")" : "") +
+                     "\nDraft: " + draft }
+        ]
+      })
+    });
+    clearTimeout(timer);
+    if(!r.ok) return draft;
+    const j = await r.json();
+    const out = j && j.choices && j.choices[0] && j.choices[0].message &&
+                j.choices[0].message.content;
+    return (out && out.trim()) ? out.trim().slice(0, 1200) : draft;
+  }catch(e){
+    clearTimeout(timer);
+    return draft;
+  }
+}
+
+/* ---------------- main ---------------------------------------------------- */
 export default {
-  async fetch(request, env) {
-    const url = new URL(request.url);
+  async fetch(req, env){
+    const url = new URL(req.url);
+    const path = url.pathname;
+    const ip = clientIp(req);
 
-    if (request.method === "OPTIONS") {
-      return new Response(null, { headers: cors });
+    if(req.method === "OPTIONS") return corsPreflight();
+
+    /* ---- public: business config ---- */
+    if(path === "/config" && req.method === "GET"){
+      if(rateLimited("cfg:" + ip, LIMITS.config.max, LIMITS.config.windowMs)) return tooMany();
+      const biz = url.searchParams.get("biz") || "";
+      if(!validBiz(biz)) return json({ ok:false, error:"Unknown business." }, 404);
+      try{
+        const cfg = await env.BUSINESS_CONFIGS.get("biz:" + biz, "json");
+        if(!cfg) return json({ ok:false, error:"Unknown business." }, 404);
+        return json({ ok:true, config:{
+          business_name: cfg.business_name || "",
+          business_category: cfg.business_category || "",
+          google_review_url: cfg.google_review_url || "",
+          questions: Array.isArray(cfg.questions) ? cfg.questions.slice(0, 15) : []
+        }});
+      }catch(e){
+        return json({ ok:false, error:"Temporarily unavailable." }, 503);
+      }
     }
 
-    // ---- GET /config?biz={id} : public, used by the frontend ----
-    if (url.pathname === "/config" && request.method === "GET") {
-      const biz = url.searchParams.get("biz");
-      if (!biz) return json({ error: "missing biz" }, 400);
-      const cfg = await env.BUSINESS_CONFIGS.get(biz, "json");
-      if (!cfg) return json({ error: "business not found" }, 404);
-      return json(cfg);
+    /* ---- public: review generation ---- */
+    if(path === "/generate-review" && req.method === "POST"){
+      if(rateLimited("gen:" + ip, LIMITS.generate.max, LIMITS.generate.windowMs)) return tooMany();
+      let body = null;
+      try{ body = await req.json(); }catch(e){ return json({ ok:false, error:"Bad request." }, 400); }
+      if(!validGenerateBody(body)) return json({ ok:false, error:"Bad request." }, 400);
+      const draft = localReview(body);
+      const polished = await groqPolish(env, draft, body);
+      return json({ ok:true, review: polished, polished: polished !== draft });
     }
 
-    // ---- POST /generate-review : AI draft, with graceful fallback ----
-    if (url.pathname === "/generate-review" && request.method === "POST") {
-      let body;
-      try {
-        body = await request.json();
-      } catch (e) {
-        return json({ error: "bad json" }, 400);
+    /* ---- admin: auth gate ---- */
+    const isAdmin = path === "/admin/save" || path === "/admin/get" || path === "/admin/list";
+    if(isAdmin){
+      if(rateLimited("adm:" + ip, LIMITS.admin.max, LIMITS.admin.windowMs)) return tooMany();
+      const key = req.headers.get("X-Admin-Key") || "";
+      if(!env.ADMIN_PASSWORD || !safeEqual(key, env.ADMIN_PASSWORD)){
+        return json({ ok:false, error:"Unauthorized." }, 401);
       }
-      const business_name = body.business_name;
-      const questions = body.questions;
-      const answers = body.answers;
-      if (!business_name || !questions || !answers) {
-        return json({ error: "missing fields" }, 400);
-      }
-      try {
-        const review = await callGroq(
-          env,
-          buildPrompt(business_name, questions, answers)
-        );
-        if (review) return json({ review: review });
-      } catch (e) {
-        // fall through to fallback flag
-      }
-      return json({ use_fallback: true });
     }
 
-    // ---- admin auth ----
-    const adminKey = request.headers.get("X-Admin-Key");
-    const authed =
-      adminKey && env.ADMIN_PASSWORD && adminKey === env.ADMIN_PASSWORD;
-
-    // ---- POST /admin/save : create / update a business ----
-    if (url.pathname === "/admin/save" && request.method === "POST") {
-      if (!authed) return json({ error: "unauthorized" }, 401);
-      let body;
-      try {
-        body = await request.json();
-      } catch (e) {
-        return json({ error: "bad json" }, 400);
+    if(path === "/admin/save" && req.method === "POST"){
+      let body = null;
+      try{ body = await req.json(); }catch(e){ return json({ ok:false, error:"Bad request." }, 400); }
+      const biz = body && body.biz;
+      const cfg = body && body.config;
+      if(!validBiz(biz) || !cfg || typeof cfg !== "object"){
+        return json({ ok:false, error:"Bad request." }, 400);
       }
-      const id = body.id;
-      const config = body.config;
-      if (!id || !/^[a-z0-9-]{2,40}$/.test(id)) {
-        return json(
-          { error: "bad id — use lowercase letters, numbers, dashes" },
-          400
-        );
+      const clean = {
+        business_name: String(cfg.business_name || "").slice(0, 80),
+        business_category: String(cfg.business_category || "").slice(0, 40),
+        google_review_url: String(cfg.google_review_url || "").slice(0, 500),
+        questions: Array.isArray(cfg.questions)
+          ? cfg.questions.filter(function(q){ return typeof q === "string"; })
+              .map(function(q){ return q.slice(0, 200); }).slice(0, 15)
+          : []
+      };
+      if(!clean.business_name.trim()) return json({ ok:false, error:"Bad request." }, 400);
+      try{
+        await env.BUSINESS_CONFIGS.put("biz:" + biz, JSON.stringify(clean));
+        return json({ ok:true });
+      }catch(e){
+        return json({ ok:false, error:"Temporarily unavailable." }, 503);
       }
-      if (!config || !config.name) {
-        return json({ error: "config.name is required" }, 400);
-      }
-      await env.BUSINESS_CONFIGS.put(id, JSON.stringify(config));
-      return json({ ok: true, id: id });
     }
 
-    // ---- GET /admin/list : list all businesses ----
-    if (url.pathname === "/admin/list" && request.method === "GET") {
-      if (!authed) return json({ error: "unauthorized" }, 401);
-      const list = await env.BUSINESS_CONFIGS.list();
-      const items = [];
-      for (const k of list.keys) {
-        const cfg = await env.BUSINESS_CONFIGS.get(k.name, "json");
-        items.push({ id: k.name, name: (cfg && cfg.name) || k.name });
+    if(path === "/admin/get" && req.method === "POST"){
+      let body = null;
+      try{ body = await req.json(); }catch(e){ return json({ ok:false, error:"Bad request." }, 400); }
+      const biz = body && body.biz;
+      if(!validBiz(biz)) return json({ ok:false, error:"Bad request." }, 400);
+      try{
+        const cfg = await env.BUSINESS_CONFIGS.get("biz:" + biz, "json");
+        return json({ ok:true, config: cfg || null });
+      }catch(e){
+        return json({ ok:false, error:"Temporarily unavailable." }, 503);
       }
-      return json({ businesses: items });
     }
 
-    // ---- POST /admin/delete : remove a business ----
-    if (url.pathname === "/admin/delete" && request.method === "POST") {
-      if (!authed) return json({ error: "unauthorized" }, 401);
-      let body;
-      try {
-        body = await request.json();
-      } catch (e) {
-        return json({ error: "bad json" }, 400);
+    if(path === "/admin/list" && req.method === "GET"){
+      try{
+        const listed = await env.BUSINESS_CONFIGS.list({ prefix: "biz:" });
+        return json({ ok:true,
+          businesses: (listed.keys || []).map(function(k){ return k.name.slice(4); }) });
+      }catch(e){
+        return json({ ok:false, error:"Temporarily unavailable." }, 503);
       }
-      if (!body.id) return json({ error: "missing id" }, 400);
-      await env.BUSINESS_CONFIGS.delete(body.id);
-      return json({ ok: true });
     }
 
-    return json({ error: "not found" }, 404);
-  },
+    return json({ ok:false, error:"Not found." }, 404);
+  }
 };
