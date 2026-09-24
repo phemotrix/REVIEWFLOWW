@@ -3,10 +3,9 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>VORTRIX Admin</title>
+<title>Reviewwflow</title>
 <meta name="theme-color" content="#0d0b08">
 <link rel="icon" href="icon.svg">
-<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css">
 <style>
 :root{
@@ -59,6 +58,9 @@ h2.sec:first-child{margin-top:4px}
 .stat{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:14px}
 .stat .n{font-size:26px;font-weight:800;color:var(--brand2)}
 .stat .l{font-size:12px;color:var(--muted);margin-top:4px}
+.stat .n{display:flex;align-items:center;justify-content:center;gap:12px}
+.step{width:30px;height:30px;border-radius:50%;border:1px solid var(--line);background:rgba(255,255,255,.07);color:var(--brand2);font-size:18px;font-weight:800;line-height:1;cursor:pointer;padding:0;flex:0 0 auto}
+.step:active{transform:scale(.9)}
 .card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:14px;margin-bottom:10px}
 .row{display:flex;align-items:center;gap:10px}
 .row .grow{flex:1;min-width:0}
@@ -70,6 +72,7 @@ h2.sec:first-child{margin-top:4px}
 }
 .btn:active{transform:scale(.98)}
 .btn.ghost{background:var(--card2);color:var(--text);border:1px solid var(--line)}
+.btn.sel{border-color:var(--brand);color:var(--brand2);background:rgba(216,169,78,.12)}
 .btn.small{width:auto;padding:9px 13px;font-size:13px;border-radius:11px}
 .btn.danger{background:rgba(248,113,113,.12);color:var(--red);border:1px solid rgba(248,113,113,.3)}
 .btnrow{display:flex;gap:8px;margin-top:10px}
@@ -125,10 +128,8 @@ h2.sec:first-child{margin-top:4px}
 .switch input:checked + .slider{background:rgba(216,169,78,.4)}
 .switch input:checked + .slider:before{transform:translateX(22px);background:var(--brand)}
 
-/* zone view */
-#zoneview{display:none;position:fixed;inset:0;z-index:80;background:var(--bg);overflow-y:auto;padding-bottom:40px}
-#zoneview.open{display:block}
-#zmap{height:300px;width:100%;z-index:1}
+/* sector view */
+#sectorview{display:none;position:fixed;inset:0;z-index:80;background:var(--bg);overflow-y:auto;padding-bottom:40px}
 .zv-head{position:sticky;top:0;z-index:70;background:rgba(13,11,8,.95);backdrop-filter:blur(8px);padding:12px 14px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:10px}
 .zv-body{padding:14px;max-width:560px;margin:0 auto}
 .num{
@@ -145,12 +146,6 @@ h2.sec:first-child{margin-top:4px}
 .notein{width:100%;background:var(--card2);border:1px solid var(--line);color:var(--text);border-radius:9px;padding:8px 10px;font-size:13px;margin-top:8px;font-family:inherit}
 .prog{height:8px;background:rgba(255,255,255,.07);border-radius:99px;overflow:hidden;margin:8px 0}
 .prog > div{height:100%;background:linear-gradient(90deg,var(--brand),var(--brand2));border-radius:99px;transition:width .3s}
-.leaflet-divnum{
-  background:linear-gradient(135deg,var(--brand),#b57f2a);color:#1a1206;font-weight:800;
-  border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:12px;
-  border:2px solid #0d0b08;box-shadow:0 2px 8px rgba(0,0,0,.5);
-}
-.leaflet-divnum.dim{background:#3a3226;color:var(--muted)}
 .resrow{display:flex;align-items:center;gap:10px;padding:10px 4px;border-bottom:1px solid var(--line)}
 .resrow input[type=checkbox]{width:22px;height:22px;accent-color:var(--brand);flex:none}
 #toast{
@@ -182,7 +177,7 @@ h2.sec:first-child{margin-top:4px}
 <div id="app">
   <div id="topbar">
     <div class="logo">V</div>
-    <h1>VORTRIX<span>admin</span></h1>
+    <h1>Reviewwflow</h1>
   </div>
 
   <main>
@@ -190,10 +185,10 @@ h2.sec:first-child{margin-top:4px}
     <section id="tab-home" class="tab active">
       <h2 class="sec">Today</h2>
       <div class="grid2">
-        <div class="stat"><div class="n" id="st-clients">0</div><div class="l">Clients</div></div>
-        <div class="stat"><div class="n" id="st-cards">0</div><div class="l">Cards issued</div></div>
-        <div class="stat"><div class="n" id="st-pitched">0</div><div class="l">Pitched</div></div>
-        <div class="stat"><div class="n" id="st-bought">0</div><div class="l">Bought 💰</div></div>
+        <div class="stat"><div class="n"><button class="step" onclick="nudgeStat('clients',-1)" aria-label="decrease">−</button><span id="st-clients">0</span><button class="step" onclick="nudgeStat('clients',1)" aria-label="increase">+</button></div><div class="l">Clients</div></div>
+        <div class="stat"><div class="n"><button class="step" onclick="nudgeStat('cards',-1)" aria-label="decrease">−</button><span id="st-cards">0</span><button class="step" onclick="nudgeStat('cards',1)" aria-label="increase">+</button></div><div class="l">Cards issued</div></div>
+        <div class="stat"><div class="n"><button class="step" onclick="nudgeStat('pitched',-1)" aria-label="decrease">−</button><span id="st-pitched">0</span><button class="step" onclick="nudgeStat('pitched',1)" aria-label="increase">+</button></div><div class="l">Pitched</div></div>
+        <div class="stat"><div class="n"><button class="step" onclick="nudgeStat('bought',-1)" aria-label="decrease">−</button><span id="st-bought">0</span><button class="step" onclick="nudgeStat('bought',1)" aria-label="increase">+</button></div><div class="l">Bought 💰</div></div>
         <div class="stat"><div class="n" id="st-conv">0%</div><div class="l">Conversion</div></div>
         <div class="stat"><div class="n" id="st-mrr">₹0</div><div class="l">Monthly recurring</div></div>
       </div>
@@ -204,7 +199,7 @@ h2.sec:first-child{margin-top:4px}
           <button class="btn" onclick="openCardModal()">+ Card</button>
         </div>
         <div class="btnrow">
-          <button class="btn ghost" onclick="switchTab('map')">🗺 Pitch map</button>
+          <button class="btn ghost" onclick="switchTab('sectors')">📌 Sectors</button>
         </div>
       </div>
       <h2 class="sec">Tap system connection</h2>
@@ -213,6 +208,9 @@ h2.sec:first-child{margin-top:4px}
         <div class="field"><label>Worker URL</label><input id="set-worker" placeholder="https://xxx.workers.dev"></div>
         <div class="field"><label>Admin password</label><input id="set-key" type="password" placeholder="ADMIN_PASSWORD"></div>
         <button class="btn ghost" onclick="saveSettings()">Save connection</button>
+        <div class="btnrow">
+          <button class="btn ghost" onclick="testConnection()">🔌 Test connection</button>
+        </div>
         <p class="hintline" id="set-status"></p>
       </div>
       <h2 class="sec">Backup</h2>
@@ -241,13 +239,6 @@ h2.sec:first-child{margin-top:4px}
       <button class="fab" onclick="openCardModal()">+</button>
     </section>
 
-    <!-- MAP -->
-    <section id="tab-map" class="tab">
-      <h2 class="sec">Mumbai pitch zones</h2>
-      <p class="hintline">Pick a zone → research 50–70 businesses → the system orders them into a pitch route: stop 1, then 2, then 3…</p>
-      <div id="zone-list"></div>
-    </section>
-
     <!-- SECTORS -->
     <section id="tab-sectors" class="tab">
       <h2 class="sec">100 sector pitch map</h2>
@@ -260,35 +251,9 @@ h2.sec:first-child{margin-top:4px}
   <nav id="bottomnav">
     <button data-tab="home" class="on" onclick="switchTab('home')"><span class="ic">🏠</span>Home</button>
     <button data-tab="clients" onclick="switchTab('clients')"><span class="ic">👥</span>Clients</button>
-    <button data-tab="cards" onclick="switchTab('cards')"><span class="ic">💳</span>Cards</button>
-    <button data-tab="map" onclick="switchTab('map')"><span class="ic">🗺</span>Map</button>
+    <button data-tab="cards" onclick="switchTab('cards')"><span class="ic">📳</span>Cards</button>
     <button data-tab="sectors" onclick="switchTab('sectors')"><span class="ic">📌</span>Sectors</button>
   </nav>
-</div>
-
-<!-- ZONE DETAIL -->
-<div id="zoneview">
-  <div class="zv-head">
-    <button class="iconbtn" onclick="closeZone()">←</button>
-    <div class="grow"><div class="name" id="zv-name"></div><div class="sub2" id="zv-sub"></div></div>
-  </div>
-  <div id="zmap"></div>
-  <div class="zv-body">
-    <div class="card">
-      <div class="row"><div class="grow"><b>Pitch route</b><div class="sub2" id="zv-progress-label"></div></div></div>
-      <div class="prog"><div id="zv-progress" style="width:0%"></div></div>
-      <div class="btnrow">
-        <button class="btn" onclick="researchZone()">🔍 Research businesses</button>
-        <button class="btn" id="sector-load-btn" style="display:none" onclick="loadSectorStops()">📥 Load S001 sector list</button>
-      </div>
-      <div class="btnrow">
-        <button class="btn ghost" onclick="buildRoute()">🧭 Build route order</button>
-        <button class="btn ghost" onclick="openMapsChunk()">📍 Maps</button>
-      </div>
-    </div>
-    <h2 class="sec">Stops <span id="zv-count" style="color:var(--brand)"></span></h2>
-    <div id="zv-list"></div>
-  </div>
 </div>
 
 <!-- SECTOR DETAIL -->
@@ -303,9 +268,18 @@ h2.sec:first-child{margin-top:4px}
     <div class="card">
       <div class="row"><div class="grow"><b>Pitch route</b><div class="sub2" id="sec-progress-label"></div></div></div>
       <div class="prog"><div id="sec-progress" style="width:0%"></div></div>
+      <div class="sub2" id="sec-dayplan" style="margin-top:6px"></div>
       <p class="hintline">🔍 <b>Find businesses</b> pulls <b>live OSM data</b> (no review counts — OSM doesn't have them; coverage varies by area).</p>
       <div class="btnrow">
-        <button class="btn" onclick="sectorResearch()">🔍 Find businesses</button>
+        <button class="btn" onclick="sectorTakeMeThere()">🧭 Take me to the sector</button>
+      </div>
+      <div class="btnrow" id="sec-transport">
+        <button class="btn ghost small" data-tm="walk" onclick="setTransportMode('walk')">🚶 Walk</button>
+        <button class="btn ghost small" data-tm="twowheeler" onclick="setTransportMode('twowheeler')">🛵 Two-wheeler</button>
+        <button class="btn ghost small" data-tm="car" onclick="setTransportMode('car')">🚗 Car</button>
+      </div>
+      <div class="btnrow">
+        <button class="btn ghost" onclick="sectorResearch()">🔍 Find businesses</button>
         <button class="btn ghost" id="sec-curated-btn" style="display:none" onclick="sectorLoadCurated()">📂 Load curated list</button>
       </div>
       <div class="btnrow">
@@ -325,7 +299,6 @@ h2.sec:first-child{margin-top:4px}
 <div id="modal-root"><div id="modal-bg" onclick="closeModal()"></div><div id="modal"></div></div>
 <div id="toast"></div>
 
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
 <script src="template-generator.js"></script>
 <script src="app.js"></script>

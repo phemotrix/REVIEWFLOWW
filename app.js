@@ -1,23 +1,11 @@
 /* ============================================================
-   VORTRIX ADMIN — your side only.
-   Clients, cards, and the Mumbai pitch-route map.
+   Reviewwflow — your side only.
+   Clients, cards, and the 100-sector Mumbai pitch map.
    (Customer tap page is tap.html — only opens on an NFC tap.)
    ============================================================ */
 "use strict";
 
 /* ---------------- Mumbai pitch zones ---------------- */
-const ZONES = [
-  { id:"s001",     name:"S001 · Bandra West",  area:"Linking Rd · Pali Hill · Carter Rd · Bandstand · Waterfield Rd", lat:19.0596, lon:72.8295, r:2500 },
-  { id:"south",    name:"South Mumbai",        area:"Colaba · Fort · Churchgate · Worli",   lat:18.9154, lon:72.8259, r:4500 },
-  { id:"bandra",   name:"Bandra · Khar",       area:"Bandra West · Khar · Santacruz West",   lat:19.0559, lon:72.8297, r:3500 },
-  { id:"andheriw", name:"Andheri West",        area:"Andheri West · Juhu · Versova",         lat:19.1293, lon:72.8314, r:4000 },
-  { id:"powai",    name:"Powai · Andheri East",area:"Powai · Andheri East · Sakinaka",       lat:19.1232, lon:72.9093, r:4000 },
-  { id:"dadar",    name:"Dadar · Central",     area:"Dadar · Parel · Sion · Chembur",        lat:19.0201, lon:72.8409, r:4500 },
-  { id:"ghatkopar",name:"Ghatkopar · Vikhroli",area:"Ghatkopar · Vikhroli · Kanjurmarg",    lat:19.0915, lon:72.9112, r:4000 },
-  { id:"borivali", name:"Malad · Borivali",    area:"Malad · Kandivali · Borivali · Dahisar",lat:19.2350, lon:72.8551, r:5000 },
-  { id:"thane",    name:"Thane · Mulund",      area:"Thane West · Mulund · Ghodbunder Rd",   lat:19.2763, lon:72.9590, r:4500 },
-  { id:"vashi",    name:"Navi Mumbai",         area:"Vashi · Sanpada · Nerul · Kharghar",    lat:19.0801, lon:72.9986, r:5000 },
-];
 
 const CATS = ["Restaurant","Cafe","Salon","Clinic","Gym","Retail","Hotel","Other"];
 
@@ -28,6 +16,7 @@ try {
   const raw = localStorage.getItem(DB_KEY);
   if (raw) db = Object.assign(db, JSON.parse(raw));
 } catch(e){}
+if(!db.manual || typeof db.manual !== "object") db.manual = {clients:0,cards:0,pitched:0,bought:0};
 function save(){ try{ localStorage.setItem(DB_KEY, JSON.stringify(db)); }catch(e){} }
 
 function uid(){ return "x"+Math.random().toString(36).slice(2,10); }
@@ -78,12 +67,15 @@ function pitchAll(){
 }
 function renderHome(){
   const all = pitchAll();
-  const pitched = all.filter(function(p){return p.status==="pitched";}).length;
-  const bought  = all.filter(function(p){return p.status==="bought";}).length;
+  const m = db.manual || {clients:0,cards:0,pitched:0,bought:0};
+  const nClients = Math.max(0, db.clients.length + (m.clients||0));
+  const nCards   = Math.max(0, db.cards.filter(function(c){return c.status==="issued";}).length + (m.cards||0));
+  const pitched  = Math.max(0, all.filter(function(p){return p.status==="pitched";}).length + (m.pitched||0));
+  const bought   = Math.max(0, all.filter(function(p){return p.status==="bought";}).length + (m.bought||0));
   const no      = all.filter(function(p){return p.status==="no";}).length;
   const done = pitched+bought+no;
-  document.getElementById("st-clients").textContent = db.clients.length;
-  document.getElementById("st-cards").textContent = db.cards.filter(function(c){return c.status==="issued";}).length;
+  document.getElementById("st-clients").textContent = nClients;
+  document.getElementById("st-cards").textContent = nCards;
   document.getElementById("st-pitched").textContent = pitched;
   document.getElementById("st-bought").textContent = bought;
   document.getElementById("st-conv").textContent = done? Math.round(bought/done*100)+"%" : "0%";
@@ -92,13 +84,47 @@ function renderHome(){
   document.getElementById("st-mrr").textContent = "₹"+mrr.toLocaleString("en-IN");
   document.getElementById("set-worker").value = db.settings.workerUrl||"";
   document.getElementById("set-key").value = db.settings.adminKey||"";
-  document.getElementById("set-status").textContent =
-    db.settings.workerUrl ? "Connected ✓ — publishing works." : "";
+  if(db.settings.workerUrl && db.settings.adminKey) testConnection();
+  else document.getElementById("set-status").innerHTML = "";
+}
+/* manual +/- steppers on the home stat cards */
+function statBase(key){
+  const all = pitchAll();
+  if(key==="clients") return db.clients.length;
+  if(key==="cards") return db.cards.filter(function(c){return c.status==="issued";}).length;
+  if(key==="pitched") return all.filter(function(p){return p.status==="pitched";}).length;
+  if(key==="bought") return all.filter(function(p){return p.status==="bought";}).length;
+  return 0;
+}
+function nudgeStat(key, d){
+  if(!db.manual || typeof db.manual !== "object") db.manual = {clients:0,cards:0,pitched:0,bought:0};
+  const next = (db.manual[key]||0) + d;
+  if(statBase(key) + next < 0) return; /* never below zero */
+  db.manual[key] = next;
+  save(); renderHome();
+}
+async function testConnection(){
+  const url = (db.settings.workerUrl||"").replace(/\/+$/,"");
+  const key = db.settings.adminKey||"";
+  const st = document.getElementById("set-status");
+  if(!url || !key){ st.innerHTML = '<span class="pill grey">Enter Worker URL + password first</span>'; return; }
+  st.innerHTML = '<span class="pill grey">Testing…</span>';
+  try{
+    const ctrl = new AbortController();
+    const to = setTimeout(function(){ ctrl.abort(); }, 9000);
+    const r = await fetch(url+"/admin/list", { headers:{ "X-Admin-Key": key }, signal: ctrl.signal });
+    clearTimeout(to);
+    if(r.ok) st.innerHTML = '<span class="pill green">Connected ✓ — you\'re in</span>';
+    else if(r.status===401) st.innerHTML = '<span class="pill red">Wrong password</span>';
+    else st.innerHTML = '<span class="pill red">Worker error ('+r.status+')</span>';
+  }catch(e){
+    st.innerHTML = '<span class="pill red">Can\'t reach worker — check URL/connection</span>';
+  }
 }
 function saveSettings(){
   db.settings.workerUrl = document.getElementById("set-worker").value.trim().replace(/\/+$/,"");
   db.settings.adminKey = document.getElementById("set-key").value;
-  save(); renderHome(); toast("Connection saved");
+  save(); renderHome(); testConnection(); toast("Connection saved");
 }
 function exportData(){
   const blob = new Blob([JSON.stringify(db,null,2)],{type:"application/json"});
@@ -330,270 +356,9 @@ function deleteCard(code){
   save(); closeModal(); renderAll(); toast("Deleted");
 }
 
-function renderAll(){ renderHome(); renderClients(); renderCards(); renderZones(); renderSectors(); }
+function renderAll(){ renderHome(); renderClients(); renderCards(); renderSectors(); }
 document.addEventListener("DOMContentLoaded", function(){ renderAll(); loadSectors(); });
 
-/* ================= ZONES & PITCH MAP ================= */
-let currentZone = null;
-let zmap = null, zlayer = null, zline = null;
-let researchResults = [];
-
-function zoneById(id){ return ZONES.find(function(z){return z.id===id;}); }
-function currentZoneObj(){ return zoneById(currentZone); }
-function pitchOf(zid){ return db.pitch[zid] || (db.pitch[zid] = []); }
-
-function renderZones(){
-  const el = document.getElementById("zone-list");
-  el.innerHTML = ZONES.map(function(z){
-    const list = db.pitch[z.id]||[];
-    const done = list.filter(function(p){return p.status!=="new";}).length;
-    const bought = list.filter(function(p){return p.status==="bought";}).length;
-    return '<div class="card" onclick="openZone(\''+z.id+'\')" style="cursor:pointer">'+
-      '<div class="row"><div class="grow"><div class="name">🗺 '+esc(z.name)+'</div>'+
-      '<div class="sub2">'+esc(z.area)+'</div></div>'+
-      '<span style="color:var(--muted);font-size:20px">›</span></div>'+
-      '<div style="margin-top:10px;display:flex;gap:6px;flex-wrap:wrap">'+
-        '<span class="pill">'+list.length+' businesses</span>'+
-        (done? '<span class="pill">✓ '+done+' done</span>':"")+
-        (bought? '<span class="pill green">💰 '+bought+' bought</span>':"")+
-      '</div></div>';
-  }).join("");
-}
-
-function openZone(id){
-  currentZone = id;
-  const z = currentZoneObj();
-  document.getElementById("zv-name").textContent = z.name;
-  document.getElementById("zv-sub").textContent = z.area;
-  document.getElementById("zoneview").classList.add("open");
-  document.body.style.overflow = "hidden";
-  renderZoneDetail();
-  initZMap(z);
-  drawMarkers();
-  document.getElementById("sector-load-btn").style.display = (id==="s001") ? "" : "none";
-  document.getElementById("zoneview").scrollTop = 0;
-}
-function closeZone(){
-  document.getElementById("zoneview").classList.remove("open");
-  document.body.style.overflow = "";
-  if(zmap){ zmap.remove(); zmap = null; zlayer = null; zline = null; }
-  currentZone = null;
-  renderZones(); renderHome();
-}
-
-function renderZoneDetail(){
-  const z = currentZoneObj(); if(!z) return;
-  const list = pitchOf(z.id).slice().sort(function(a,b){
-    return (a.order||9999)-(b.order||9999);
-  });
-  const done = list.filter(function(p){return p.status!=="new";}).length;
-  document.getElementById("zv-count").textContent = "· "+list.length;
-  document.getElementById("zv-progress-label").textContent =
-    list.length? done+" of "+list.length+" visited" : "No businesses yet — hit Research";
-  document.getElementById("zv-progress").style.width =
-    list.length? Math.round(done/list.length*100)+"%" : "0%";
-
-  const box = document.getElementById("zv-list");
-  if(!list.length){
-    box.innerHTML = '<div class="empty">Nothing here yet.<br>Tap <b>🔍 Research businesses</b> to find 50–70 pitchable spots in '+esc(z.name)+'.</div>';
-    return;
-  }
-  box.innerHTML = list.map(function(p){
-    const nb = p.order? '<div class="num'+(p.status!=="new"?" done":"")+'">'+p.order+'</div>'
-                      : '<div class="num">•</div>';
-    const nb2 = p.status==="bought"? '<div class="num bought">'+(p.order||"💰")+'</div>' : nb;
-    function sb(s,label){
-      return '<button class="sbtn'+(p.status===s?" on-"+s:"")+'" onclick="setPitchStatus(\''+p.oid+'\',\''+s+'\')">'+label+'</button>';
-    }
-    return '<div class="card"><div class="row">'+nb2+'<div class="grow">'+
-      '<div class="name" style="font-size:15px">'+esc(p.name)+'</div>'+
-      '<div class="sub2">'+esc(p.cat||"")+(p.addr? " · "+esc(p.addr):"")+'</div></div>'+
-      '<button class="iconbtn" onclick="window.open(\'https://www.google.com/maps/dir/?api=1&destination='+p.lat+','+p.lon+'\',\'_blank\')">🧭</button></div>'+
-      '<div class="statusbtns">'+sb("pitched","✓ Pitched")+sb("bought","💰 Bought")+sb("no","✗ No")+'</div>'+
-      '<input class="notein" placeholder="1-line note…" value="'+esc(p.note||"")+'" onchange="setPitchNote(\''+p.oid+'\',this.value)">'+
-      '</div>';
-  }).join("");
-}
-
-function setPitchStatus(oid, s){
-  const list = pitchOf(currentZone);
-  const p = list.find(function(x){return x.oid===oid;});
-  if(!p) return;
-  p.status = (p.status===s)? "new" : s;
-  save(); renderZoneDetail(); drawMarkers();
-}
-function setPitchNote(oid, v){
-  const list = pitchOf(currentZone);
-  const p = list.find(function(x){return x.oid===oid;});
-  if(p){ p.note = v; save(); }
-}
-
-function initZMap(z){
-  if(zmap){ zmap.remove(); zmap = null; }
-  zmap = L.map("zmap").setView([z.lat, z.lon], 13);
-  L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png",{
-    maxZoom:19, attribution:"© OpenStreetMap contributors"
-  }).addTo(zmap);
-  L.circle([z.lat, z.lon], {radius: z.r, color:"#d8a94e", weight:1, opacity:.5, fillOpacity:.04}).addTo(zmap);
-  zlayer = L.layerGroup().addTo(zmap);
-  setTimeout(function(){ if(zmap) zmap.invalidateSize(); }, 350);
-}
-function drawMarkers(){
-  const z = currentZoneObj();
-  if(!zmap || !z || !zlayer) return;
-  zlayer.clearLayers();
-  if(zline){ zmap.removeLayer(zline); zline = null; }
-  const list = (db.pitch[z.id]||[]).filter(function(p){return p.lat && p.lon;});
-  const ordered = list.filter(function(p){return p.order;}).sort(function(a,b){return a.order-b.order;});
-  list.forEach(function(p){
-    const dim = (p.status==="bought" || p.status==="no");
-    const icon = L.divIcon({
-      className:"",
-      html:'<div class="leaflet-divnum'+(dim?" dim":"")+'" style="width:28px;height:28px">'+(p.order||"•")+'</div>',
-      iconSize:[28,28], iconAnchor:[14,14]
-    });
-    L.marker([p.lat, p.lon], {icon:icon}).addTo(zlayer)
-      .bindPopup("<b>"+esc(p.name)+"</b><br>"+esc(p.cat||""));
-  });
-  if(ordered.length > 1){
-    zline = L.polyline(ordered.map(function(p){return [p.lat,p.lon];}),
-      {color:"#d8a94e", weight:3, opacity:.75}).addTo(zmap);
-    zmap.fitBounds(zline.getBounds().pad(0.15));
-  } else if(list.length){
-    zmap.fitBounds(L.latLngBounds(list.map(function(p){return [p.lat,p.lon];})).pad(0.2));
-  } else {
-    zmap.setView([z.lat, z.lon], 13);
-  }
-}
-
-/* ---------------- curated sector lists ---------------- */
-async function loadSectorStops(){
-  const z = currentZoneObj(); if(!z) return;
-  if(!confirm("Load the curated S001 · Bandra West list (85 researched stops)? This replaces the current pitch list for this zone.")) return;
-  openModal('<h3>📥 Loading sector list…</h3><p class="hintline">Fetching the researched stops.</p>');
-  try{
-    const r = await fetch("./sector-data/S001-bandra-west.json");
-    if(!r.ok) throw new Error("HTTP "+r.status);
-    const d = await r.json();
-    const tag = Date.now().toString(36);
-    db.pitch[z.id] = (d.stops||[]).map(function(s,i){
-      return { oid:"s001_"+tag+"_"+i, name:s.name, cat:s.cat, lat:s.lat, lon:s.lon,
-               addr:s.area, order:s.stop, status:"new", note:"" };
-    });
-    save(); closeModal(); renderZoneDetail(); drawMarkers();
-    toast("Loaded "+db.pitch[z.id].length+" sector stops ✓");
-  }catch(e){
-    openModal('<h3>Couldn\'t load the sector list</h3>'+
-      '<p class="hintline">'+esc(String((e&&e.message)||e))+' — make sure the <b>sector-data</b> folder was uploaded to GitHub next to index.html.</p>'+
-      '<div class="btnrow"><button class="btn" onclick="closeModal()">OK</button></div>');
-  }
-}
-
-/* ---------------- research (OpenStreetMap) ---------------- */
-function catLabel(t){
-  function pretty(s){ return s.replace(/_/g," ").replace(/\b\w/g,function(c){return c.toUpperCase();}); }
-  if(t.shop) return pretty(t.shop);
-  if(t.amenity) return pretty(t.amenity);
-  if(t.leisure) return pretty(t.leisure);
-  if(t.tourism) return pretty(t.tourism);
-  if(t.office) return pretty(t.office)+" office";
-  return "Business";
-}
-function addrOf(t){
-  const parts = [];
-  if(t["addr:housenumber"]) parts.push(t["addr:housenumber"]);
-  if(t["addr:street"]) parts.push(t["addr:street"]);
-  if(t["addr:suburb"]) parts.push(t["addr:suburb"]);
-  return parts.join(", ");
-}
-function overpassQL(z){
-  return "[out:json][timeout:30];("+
-    'node["shop"~"^(bakery|beauty|clothes|shoes|jewelry|gift|florist|optician|mobile_phone|electronics|furniture|cosmetics|hairdresser|massage|pastry|confectionery)$"](around:'+z.r+","+z.lat+","+z.lon+");"+
-    'node["amenity"~"^(restaurant|cafe|fast_food|ice_cream|bar|pub|dentist|clinic|doctors|pharmacy)$"](around:'+z.r+","+z.lat+","+z.lon+");"+
-    'node["leisure"="fitness_centre"](around:'+z.r+","+z.lat+","+z.lon+");"+
-    'node["tourism"~"^(hotel|guest_house)$"](around:'+z.r+","+z.lat+","+z.lon+");"+
-    ");out 90;";
-}
-async function researchZone(){
-  const z = currentZoneObj();
-  openModal('<h3>🔍 Researching '+esc(z.name)+'</h3>'+
-    '<p class="hintline">Scanning OpenStreetMap for restaurants, cafes, salons, clinics, gyms, hotels & shops…</p>');
-  try{
-    const r = await fetch("https://overpass-api.de/api/interpreter", {
-      method:"POST",
-      headers:{ "Content-Type":"application/x-www-form-urlencoded" },
-      body:"data="+encodeURIComponent(overpassQL(z))
-    });
-    if(!r.ok) throw new Error("overpass "+r.status);
-    const d = await r.json();
-    const have = {};
-    (db.pitch[z.id]||[]).forEach(function(p){ have[p.oid]=1; });
-    researchResults = (d.elements||[])
-      .filter(function(e){ return e.tags && e.tags.name && !have["n"+e.id]; })
-      .slice(0,90)
-      .map(function(e){
-        return { oid:"n"+e.id, name:e.tags.name, cat:catLabel(e.tags),
-                 lat:e.lat, lon:e.lon, addr:addrOf(e.tags) };
-      });
-    if(!researchResults.length){
-      openModal('<h3>No new spots found</h3>'+
-        '<p class="hintline">Everything found here is already in your list, or the area scan came up empty. Try another zone.</p>'+
-        '<button class="btn" onclick="closeModal()">Close</button>');
-      return;
-    }
-    showResearchModal(z);
-  }catch(e){
-    openModal('<h3>Research failed</h3>'+
-      '<p class="hintline">Network hiccup talking to OpenStreetMap. Check your connection and try again.</p>'+
-      '<div class="btnrow"><button class="btn" onclick="closeModal()">Close</button>'+
-      '<button class="btn ghost" onclick="researchZone()">Retry</button></div>');
-  }
-}
-function showResearchModal(z){
-  const rows = researchResults.map(function(c,i){
-    return '<label class="resrow"><input type="checkbox" data-i="'+i+'" checked>'+
-      '<span class="grow"><b>'+esc(c.name)+'</b><br>'+
-      '<span class="sub2">'+esc(c.cat)+(c.addr?" · "+esc(c.addr):"")+'</span></span></label>';
-  }).join("");
-  openModal(
-    '<h3>'+researchResults.length+' found in '+esc(z.name)+'</h3>'+
-    '<p class="hintline">Tick the ones worth pitching, then add them. Aim for 50–70.</p>'+
-    '<div class="btnrow" style="margin-bottom:8px">'+
-      '<button class="btn ghost small" onclick="researchCheckAll(true)">Select all</button>'+
-      '<button class="btn ghost small" onclick="researchCheckAll(false)">Clear</button></div>'+
-    '<div style="max-height:46vh;overflow-y:auto">'+rows+'</div>'+
-    '<div class="btnrow"><button class="btn" id="res-add" onclick="addResearch()">Add selected</button></div>'
-  );
-  updateResCount();
-  document.querySelectorAll('#modal input[type=checkbox]').forEach(function(cb){
-    cb.addEventListener("change", updateResCount);
-  });
-}
-function researchCheckAll(v){
-  document.querySelectorAll('#modal input[type=checkbox]').forEach(function(cb){ cb.checked=v; });
-  updateResCount();
-}
-function updateResCount(){
-  const n = document.querySelectorAll('#modal input[type=checkbox]:checked').length;
-  const b = document.getElementById("res-add");
-  if(b) b.textContent = "Add selected ("+n+")";
-}
-function addResearch(){
-  const z = currentZoneObj();
-  const list = pitchOf(z.id);
-  let added = 0;
-  document.querySelectorAll('#modal input[type=checkbox]:checked').forEach(function(cb){
-    const c = researchResults[parseInt(cb.dataset.i,10)];
-    if(c && !list.some(function(p){return p.oid===c.oid;})){
-      list.push({ oid:c.oid, name:c.name, cat:c.cat, lat:c.lat, lon:c.lon,
-                  addr:c.addr, status:"new", note:"", order:null });
-      added++;
-    }
-  });
-  save(); closeModal();
-  renderZoneDetail(); drawMarkers();
-  toast(added+" added — now build the route 🧭");
-}
 
 /* ---------------- route optimizer ---------------- */
 function hav(a,b){
@@ -614,10 +379,10 @@ function getPos(ms){
     );
   });
 }
-async function osrmTable(start, pts){
+async function osrmTable(start, pts, profile){
   try{
     const coords = [start].concat(pts).map(function(p){return p.lon+","+p.lat;}).join(";");
-    const r = await fetch("https://router.project-osrm.org/table/v1/driving/"+
+    const r = await fetch("https://router.project-osrm.org/table/v1/"+(profile||"driving")+"/"+
       coords+"?annotations=distance");
     const d = await r.json();
     if(d && d.code==="Ok" && d.distances) return d.distances;
@@ -656,40 +421,6 @@ function routeOrder(matrix, start, pts){
   }
   return tour.slice(1).map(function(x){return x-1;});
 }
-async function buildRoute(){
-  const z = currentZoneObj();
-  const list = pitchOf(z.id);
-  if(!list.length){ toast("Research businesses first"); return; }
-  toast("Getting your location…");
-  let start;
-  try{ start = await getPos(9000); }
-  catch(e){ start = {lat:z.lat, lon:z.lon}; toast("GPS off — starting from zone center"); }
-  toast("Optimizing "+list.length+" stops…");
-  const pts = list.map(function(p){return {lat:p.lat, lon:p.lon};});
-  const matrix = pts.length<=100 ? await osrmTable(start, pts) : null;
-  const order = routeOrder(matrix, start, pts);
-  order.forEach(function(pi,i){ list[pi].order = i+1; });
-  list.sort(function(a,b){return (a.order||9999)-(b.order||9999);});
-  try{
-    db.pitchMeta = db.pitchMeta||{};
-    db.pitchMeta[z.id] = {startLat:start.lat, startLon:start.lon};
-  }catch(e){}
-  save(); renderZoneDetail(); drawMarkers();
-  toast("Route ready — stop 1 → stop "+list.length+" 🧭");
-}
-function openMapsChunk(){
-  const z = currentZoneObj();
-  const list = (db.pitch[z.id]||[]).filter(function(p){return p.order && p.status!=="bought" && p.status!=="no";})
-    .sort(function(a,b){return a.order-b.order;}).slice(0,9);
-  if(!list.length){ toast("Nothing left to visit here 🎉"); return; }
-  const meta = (db.pitchMeta&&db.pitchMeta[z.id]) || {startLat:z.lat, startLon:z.lon};
-  const origin = meta.startLat+","+meta.startLon;
-  const dest = list[list.length-1].lat+","+list[list.length-1].lon;
-  const wp = list.slice(0,-1).map(function(p){return p.lat+","+p.lon;}).join("|");
-  let url = "https://www.google.com/maps/dir/?api=1&origin="+origin+"&destination="+dest+"&travelmode=driving";
-  if(wp) url += "&waypoints="+encodeURIComponent(wp);
-  window.open(url,"_blank");
-}
 
 /* ============================================================
    SECTORS — 100-sector Mumbai pitch map.
@@ -697,9 +428,14 @@ function openMapsChunk(){
    ordered route (GPS start, NN + 2-opt over OSRM) → live 3D map.
    HONESTY: OSM has no Google review counts and coverage varies —
    the UI says so. Nothing is fabricated.
-   Stops live in db.sectors (localStorage). Old zone tab untouched.
+   Stops live in db.sectors (localStorage). Sector data also ships embedded
+   in this file as a fallback if the sector-data/ folder is missing.
    ============================================================ */
 let SECTORS100 = [];
+
+/* ===== EMBEDDED sector data (fallback if ./sector-data/*.json fetch fails) ===== */
+const SECTORS_EMBEDDED = [{"id":"S001","name":"Bandra West","parent":"Bandra/Khar","landmarks":"Linking Rd, Pali Hill, Carter Rd, Bandstand, Waterfield Rd","tier":1,"lat":19.0596,"lon":72.8295,"src":"known"},{"id":"S002","name":"Khar West","parent":"Bandra/Khar","landmarks":"Khar Danda Rd, 14th/15th/16th Rd, Linking Rd ext","tier":1,"lat":19.0788759,"lon":72.8320646,"src":"nominatim"},{"id":"S003","name":"Santacruz West","parent":"Bandra/Khar","landmarks":"Juhu Tara Rd, Linking Rd (Santacruz), SV Rd","tier":1,"lat":19.0844004,"lon":72.8372899,"src":"nominatim"},{"id":"S004","name":"Bandra East \u00b7 BKC","parent":"Bandra/Khar","landmarks":"BKC, Kalanagar, Income Tax, MMRDA grounds","tier":1,"lat":19.0638693,"lon":72.8666148,"src":"nominatim"},{"id":"S005","name":"Bandra Station West","parent":"Bandra/Khar","landmarks":"Hill Rd, Bazaar Rd, St. Peter's, Station Rd","tier":1,"lat":19.0552109,"lon":72.8304474,"src":"nominatim"},{"id":"S006","name":"Juhu","parent":"Andheri West","landmarks":"Juhu Beach, JVPD, ISKCON, Juhu Koliwada","tier":1,"lat":19.1130692,"lon":72.8266734,"src":"nominatim"},{"id":"S007","name":"Veera Desai \u00b7 Oshiwara","parent":"Andheri West","landmarks":"Veera Desai Rd, Oshiwara Garden, Andheri Sports Complex","tier":1,"lat":19.1344232,"lon":72.8353783,"src":"nominatim"},{"id":"S008","name":"Lokhandwala","parent":"Andheri West","landmarks":"Lokhandwala Complex, Back Rd, Green Acres","tier":1,"lat":19.1430985,"lon":72.8246055,"src":"nominatim"},{"id":"S009","name":"Fort \u00b7 Kala Ghoda","parent":"South Mumbai","landmarks":"Horniman Circle, Kala Ghoda, DN Rd, Fountain","tier":1,"lat":18.9320095,"lon":72.8350198,"src":"nominatim"},{"id":"S010","name":"Ballard Estate","parent":"South Mumbai","landmarks":"Ballard Pier, Custom House, Fort south","tier":1,"lat":18.9366512,"lon":72.8391325,"src":"nominatim"},{"id":"S011","name":"Colaba","parent":"South Mumbai","landmarks":"Colaba Causeway, Gateway, Regal Circle, Colaba Market","tier":1,"lat":18.9230531,"lon":72.8316969,"src":"nominatim"},{"id":"S012","name":"Cuffe Parade","parent":"South Mumbai","landmarks":"Nariman Point, NCPA, Maker Chambers","tier":1,"lat":18.9251593,"lon":72.8205615,"src":"nominatim"},{"id":"S013","name":"Churchgate","parent":"South Mumbai","landmarks":"Marine Drive, Eros Cinema, Churchgate station","tier":1,"lat":18.9337168,"lon":72.8274613,"src":"nominatim"},{"id":"S014","name":"Malabar Hill","parent":"South Mumbai","landmarks":"Walkeshwar, Banganga, Teen Batti, Ridge Rd","tier":1,"lat":18.9581616,"lon":72.8033665,"src":"nominatim"},{"id":"S015","name":"Altamount Rd","parent":"South Mumbai","landmarks":"Altamount Rd, Carmichael Rd, Pedder Rd, Hughes Rd","tier":1,"lat":18.9730483,"lon":72.8101437,"src":"nominatim"},{"id":"S016","name":"Breach Candy","parent":"South Mumbai","landmarks":"Warden Rd, Mahalaxmi Temple, Amarsons, Bhulabhai Desai Rd","tier":1,"lat":18.9714363,"lon":72.8051492,"src":"nominatim"},{"id":"S017","name":"Dadar West","parent":"Dadar/Central","landmarks":"Ranade Rd, Shivaji Park, Plaza, NC Kelkar Rd","tier":1,"lat":19.0272788,"lon":72.8383977,"src":"nominatim"},{"id":"S018","name":"Prabhadevi","parent":"Dadar/Central","landmarks":"Siddhivinayak, Sayani Rd, Ravindra Natya Mandir","tier":1,"lat":19.0148811,"lon":72.8279556,"src":"nominatim"},{"id":"S019","name":"Worli","parent":"Dadar/Central","landmarks":"Worli Sea Face, Worli Village, Dr. Annie Besant Rd","tier":1,"lat":19.0086197,"lon":72.8146698,"src":"nominatim"},{"id":"S020","name":"Lower Parel","parent":"Dadar/Central","landmarks":"Phoenix Mills, High Street Phoenix, Mathuradas Mill","tier":1,"lat":18.9946688,"lon":72.8243102,"src":"nominatim"},{"id":"S021","name":"Powai","parent":"Powai/Andheri East","landmarks":"Hiranandani, Galleria, JVLR, IIT Main Gate","tier":1,"lat":19.1193993,"lon":72.9116357,"src":"nominatim"},{"id":"S022","name":"Vile Parle West","parent":"Bandra/Khar","landmarks":"Market Rd, Bajaj Rd, Sathaye College, station W","tier":1,"lat":19.0999098,"lon":72.8440038,"src":"nominatim"},{"id":"S023","name":"Mahalaxmi","parent":"South Mumbai","landmarks":"Racecourse, Haji Ali, Saat Rasta, Dr. E Moses Rd","tier":2,"lat":18.9852045,"lon":72.8205984,"src":"nominatim"},{"id":"S024","name":"Tardeo","parent":"South Mumbai","landmarks":"Opera House, Kennedy Bridge, Tardeo Rd","tier":2,"lat":18.9628835,"lon":72.813514,"src":"nominatim"},{"id":"S025","name":"Kalbadevi","parent":"South Mumbai","landmarks":"Zaveri Bazaar, Crawford Market, Bhuleshwar, Abdul Rehman St","tier":2,"lat":18.9492575,"lon":72.8279382,"src":"nominatim"},{"id":"S026","name":"Dadar East","parent":"Dadar/Central","landmarks":"Hindu Colony, Tilak Bridge, station E","tier":2,"lat":19.0199623,"lon":72.8478929,"src":"nominatim"},{"id":"S027","name":"Parel","parent":"Dadar/Central","landmarks":"Lalbaug, Currey Rd, KEM, Parel station","tier":2,"lat":19.0094817,"lon":72.8376614,"src":"nominatim"},{"id":"S028","name":"Matunga","parent":"Dadar/Central","landmarks":"King's Circle, Five Gardens, Matunga station","tier":2,"lat":19.0195374,"lon":72.8537881,"src":"nominatim"},{"id":"S029","name":"Mahim","parent":"Dadar/Central","landmarks":"Mori Rd, Mahim Causeway, Hinduja Hospital","tier":2,"lat":19.0406634,"lon":72.8466038,"src":"nominatim"},{"id":"S030","name":"Santacruz East \u00b7 Kalina","parent":"Bandra/Khar","landmarks":"Kalina, Mumbai University, BKC fringe, CST Rd","tier":2,"lat":19.0734267,"lon":72.854825,"src":"nominatim"},{"id":"S031","name":"DN Nagar","parent":"Andheri West","landmarks":"Azad Nagar, JP Rd, DN Nagar metro, Sports Complex","tier":2,"lat":19.1278285,"lon":72.8308602,"src":"nominatim"},{"id":"S032","name":"Four Bungalows","parent":"Andheri West","landmarks":"Manish Nagar, RTO, Four Bungalows signal","tier":2,"lat":19.1287942,"lon":72.8255543,"src":"nominatim"},{"id":"S033","name":"Versova","parent":"Andheri West","landmarks":"Yari Rd, Versova Village, jetty, beach","tier":2,"lat":19.1300123,"lon":72.8133251,"src":"nominatim"},{"id":"S034","name":"Vile Parle East","parent":"Bandra/Khar","landmarks":"Sahar Rd, Nehru Rd, Parle Tilak, station E","tier":2,"lat":19.1097455,"lon":72.8365427,"src":"nominatim"},{"id":"S035","name":"Chandivali","parent":"Powai/Andheri East","landmarks":"Nahar Amrit Shakti, Chandivali Farm Rd","tier":2,"lat":19.1091482,"lon":72.8945793,"src":"nominatim"},{"id":"S036","name":"Chakala","parent":"Powai/Andheri East","landmarks":"JB Nagar, Andheri-Kurla Rd, WEH, Chakala metro","tier":2,"lat":19.1152873,"lon":72.8618085,"src":"nominatim"},{"id":"S037","name":"Sakinaka","parent":"Powai/Andheri East","landmarks":"90 Feet Rd, Khairani Rd, Sakinaka metro","tier":2,"lat":19.1006236,"lon":72.8805461,"src":"nominatim"},{"id":"S038","name":"Marol","parent":"Powai/Andheri East","landmarks":"Military Rd, Marol Naka, Marol Church","tier":2,"lat":19.1097535,"lon":72.8759757,"src":"nominatim"},{"id":"S039","name":"Andheri East Town","parent":"Powai/Andheri East","landmarks":"Telli Galli, Pump House, Gundavali, station E","tier":2,"lat":19.1205638,"lon":72.8488433,"src":"nominatim"},{"id":"S040","name":"Ghatkopar West","parent":"Ghatkopar/Vikhroli","landmarks":"MG Rd, station W, R City Mall","tier":2,"lat":19.0997411,"lon":72.915661,"src":"nominatim"},{"id":"S041","name":"Ghatkopar East","parent":"Ghatkopar/Vikhroli","landmarks":"Pant Nagar, Vikrant Circle, Tilak Rd","tier":2,"lat":19.0833305,"lon":72.9115042,"src":"nominatim"},{"id":"S042","name":"Malad West \u00b7 Link Rd","parent":"Malad/Borivali","landmarks":"Link Rd, Inorbit, Mindspace","tier":2,"lat":19.1852851,"lon":72.8358611,"src":"nominatim"},{"id":"S043","name":"Orlem \u00b7 Evershine","parent":"Malad/Borivali","landmarks":"Orlem, Evershine Nagar, Mith Chowki","tier":2,"lat":19.1823,"lon":72.8406,"src":"manual-fix"},{"id":"S044","name":"Kandivali West","parent":"Malad/Borivali","landmarks":"MG Rd, station W, Shimpoli","tier":2,"lat":19.2041136,"lon":72.8517376,"src":"nominatim"},{"id":"S045","name":"Thakur Village","parent":"Malad/Borivali","landmarks":"Thakur Village, Thakur Complex, Lokhandwala Township","tier":2,"lat":19.2119479,"lon":72.8694449,"src":"nominatim"},{"id":"S046","name":"Borivali West","parent":"Malad/Borivali","landmarks":"Chandawarkar Ln, station W, IC Colony","tier":2,"lat":19.2298129,"lon":72.8471376,"src":"nominatim"},{"id":"S047","name":"Thane West \u00b7 Naupada","parent":"Thane/Mulund","landmarks":"Naupada, station, Teen Hath Naka","tier":2,"lat":19.1888027,"lon":72.9633143,"src":"nominatim"},{"id":"S048","name":"Ghodbunder Rd","parent":"Thane/Mulund","landmarks":"Ghodbunder Rd, Hypercity, Waghbil","tier":2,"lat":19.2681,"lon":72.9677,"src":"manual-fix"},{"id":"S049","name":"Hiranandani Estate","parent":"Thane/Mulund","landmarks":"Hiranandani Estate, Patlipada","tier":2,"lat":19.2549288,"lon":72.9820704,"src":"nominatim"},{"id":"S050","name":"Majiwada","parent":"Thane/Mulund","landmarks":"Viviana Mall, Jupiter Hospital, Eastern Express Hwy","tier":2,"lat":19.2089,"lon":72.9716,"src":"manual-fix"},{"id":"S051","name":"Mulund West","parent":"Thane/Mulund","landmarks":"MG Rd, R Mall, station W","tier":2,"lat":19.1839747,"lon":72.9515934,"src":"nominatim"},{"id":"S052","name":"Vashi","parent":"Navi Mumbai","landmarks":"Sec 17 market, Inorbit Vashi, Palm Beach Rd","tier":2,"lat":19.0654352,"lon":73.0012477,"src":"nominatim"},{"id":"S053","name":"Nerul","parent":"Navi Mumbai","landmarks":"Sec 21, Seawoods Grand Central, Palm Beach","tier":2,"lat":19.0335938,"lon":73.018164,"src":"nominatim"},{"id":"S054","name":"Seawoods \u00b7 Belapur CBD","parent":"Navi Mumbai","landmarks":"CBD Belapur, Sec 11, Seawoods station","tier":2,"lat":19.0205616,"lon":73.0180886,"src":"nominatim"},{"id":"S055","name":"Kharghar","parent":"Navi Mumbai","landmarks":"Golf Course, Central Park, Sec 12","tier":2,"lat":19.025773,"lon":73.0591845,"src":"nominatim"},{"id":"S056","name":"Chembur West","parent":"Dadar/Central","landmarks":"Station W, Diamond Garden, Chembur Naka","tier":2,"lat":19.0531279,"lon":72.9004824,"src":"nominatim"},{"id":"S057","name":"Kurla West","parent":"Dadar/Central","landmarks":"Station W, LBS Marg, Kamani","tier":2,"lat":19.0652797,"lon":72.8793805,"src":"nominatim"},{"id":"S058","name":"Jogeshwari West","parent":"Andheri West","landmarks":"Oshiwara station, Behram Baug, JVLR","tier":2,"lat":19.135,"lon":72.845,"src":"manual-fix"},{"id":"S059","name":"Goregaon West","parent":"Malad/Borivali","landmarks":"MG Rd, Bangur Nagar, station W, Aarey Rd","tier":2,"lat":19.1648688,"lon":72.8495492,"src":"nominatim"},{"id":"S060","name":"Goregaon East","parent":"Malad/Borivali","landmarks":"Oberoi Mall, Commerz, Nirlon, JVLR","tier":2,"lat":19.1737223,"lon":72.8606297,"src":"nominatim"},{"id":"S061","name":"Chembur East","parent":"Dadar/Central","landmarks":"Sindhi Camp, Trombay Rd, station E","tier":2,"lat":19.0734855,"lon":72.8823214,"src":"nominatim"},{"id":"S062","name":"Airoli","parent":"Navi Mumbai","landmarks":"Sec 19, Mindspace, station, Thane-Belapur Rd","tier":2,"lat":19.161493,"lon":73.0021466,"src":"nominatim"},{"id":"S063","name":"Mumbai Central","parent":"South Mumbai","landmarks":"Agripada, Madanpura, Maratha Mandir, station","tier":3,"lat":18.9695855,"lon":72.8193152,"src":"nominatim"},{"id":"S064","name":"Byculla","parent":"South Mumbai","landmarks":"Mazgaon, Dockyard Rd, Gloria Church, station","tier":3,"lat":18.9764065,"lon":72.8327044,"src":"nominatim"},{"id":"S065","name":"Dongri","parent":"South Mumbai","landmarks":"Bhendi Bazaar, Umerkhadi","tier":3,"lat":18.9579427,"lon":72.8317816,"src":"nominatim"},{"id":"S066","name":"Sion","parent":"Dadar/Central","landmarks":"GTB Nagar, Sion Circle, Sion Hospital","tier":3,"lat":19.0427327,"lon":72.863491,"src":"nominatim"},{"id":"S067","name":"Wadala","parent":"Dadar/Central","landmarks":"Bhakti Park, IMAX, Wadala station","tier":3,"lat":19.0269192,"lon":72.8759337,"src":"nominatim"},{"id":"S068","name":"Kurla East","parent":"Dadar/Central","landmarks":"Nehru Nagar, station E","tier":3,"lat":19.061,"lon":72.881,"src":"nominatim"},{"id":"S069","name":"Govandi","parent":"Dadar/Central","landmarks":"Deonar, Baiganwadi, station","tier":3,"lat":19.0553688,"lon":72.9150702,"src":"nominatim"},{"id":"S070","name":"Tilak Nagar","parent":"Dadar/Central","landmarks":"Tilak Nagar station, Pestom Sagar, Chembur border","tier":3,"lat":19.0657855,"lon":72.8904702,"src":"nominatim"},{"id":"S071","name":"Khar East \u00b7 Vakola","parent":"Bandra/Khar","landmarks":"Khar East, Vakola, Prabhat Colony","tier":3,"lat":19.0833,"lon":72.845,"src":"manual-fix"},{"id":"S072","name":"Jogeshwari East","parent":"Powai/Andheri East","landmarks":"JVLR, Majas, station E, WEH","tier":3,"lat":19.135,"lon":72.867,"src":"manual-fix"},{"id":"S073","name":"MIDC \u00b7 Seepz","parent":"Powai/Andheri East","landmarks":"Seepz Gate, MIDC Central Rd","tier":3,"lat":19.1056,"lon":72.8623,"src":"manual-fix"},{"id":"S074","name":"Kanjurmarg West","parent":"Powai/Andheri East","landmarks":"LBS Marg, IIT boundary, station W","tier":3,"lat":19.1253912,"lon":72.9252519,"src":"nominatim"},{"id":"S075","name":"Vikhroli East","parent":"Ghatkopar/Vikhroli","landmarks":"Kannamwar Nagar, Tagore Nagar, station E","tier":3,"lat":19.1164674,"lon":72.9356821,"src":"nominatim"},{"id":"S076","name":"Vikhroli West","parent":"Ghatkopar/Vikhroli","landmarks":"Godrej, station W, LBS Marg","tier":3,"lat":19.1114795,"lon":72.928021,"src":"nominatim"},{"id":"S077","name":"Bhandup West","parent":"Ghatkopar/Vikhroli","landmarks":"LBS Marg, station W, Dreams Mall","tier":3,"lat":19.145916,"lon":72.9366395,"src":"nominatim"},{"id":"S078","name":"Bhandup East \u00b7 Nahur","parent":"Ghatkopar/Vikhroli","landmarks":"Nahur station, Tank Rd","tier":3,"lat":19.1546144,"lon":72.9467761,"src":"nominatim"},{"id":"S079","name":"Kanjurmarg East","parent":"Ghatkopar/Vikhroli","landmarks":"Station E, LBS Marg","tier":3,"lat":19.124102,"lon":72.9385562,"src":"nominatim"},{"id":"S080","name":"Asalpha \u00b7 Saki Vihar","parent":"Ghatkopar/Vikhroli","landmarks":"Asalpha, Saki Vihar Rd","tier":3,"lat":19.1028484,"lon":72.8862483,"src":"nominatim"},{"id":"S081","name":"Malad East \u00b7 Kurar","parent":"Malad/Borivali","landmarks":"Kurar, Dindoshi, Pathanwadi","tier":3,"lat":19.1867,"lon":72.8611,"src":"manual-fix"},{"id":"S082","name":"Charkop","parent":"Malad/Borivali","landmarks":"Charkop market, Sector 8","tier":3,"lat":19.2141193,"lon":72.8258652,"src":"nominatim"},{"id":"S083","name":"Borivali East","parent":"Malad/Borivali","landmarks":"Station E, SGNP Rd, Kastur Park","tier":3,"lat":19.229068,"lon":72.8573628,"src":"nominatim"},{"id":"S084","name":"Eksar \u00b7 Mandpeshwar","parent":"Malad/Borivali","landmarks":"Eksar, Mandpeshwar, Yogi Nagar","tier":3,"lat":19.2307,"lon":72.8448,"src":"manual-fix"},{"id":"S085","name":"Dahisar West","parent":"Malad/Borivali","landmarks":"Station W, Anand Nagar, SV Rd","tier":3,"lat":19.248875,"lon":72.852959,"src":"nominatim"},{"id":"S086","name":"Dahisar East","parent":"Malad/Borivali","landmarks":"SV Rd, Rawal Pada, station E","tier":3,"lat":19.2493572,"lon":72.8596302,"src":"nominatim"},{"id":"S087","name":"Mira Rd West","parent":"Malad/Borivali","landmarks":"Station W, Silver Park, Shanti Nagar","tier":3,"lat":19.2791,"lon":72.851,"src":"manual-fix"},{"id":"S088","name":"Mira Rd East","parent":"Malad/Borivali","landmarks":"Vinay Nagar, Shanti Park, station E","tier":3,"lat":19.2791,"lon":72.862,"src":"manual-fix"},{"id":"S089","name":"Bhayandar West","parent":"Malad/Borivali","landmarks":"Station W, Jesal Park","tier":3,"lat":19.2952,"lon":72.849,"src":"manual-fix"},{"id":"S090","name":"Bhayandar East","parent":"Malad/Borivali","landmarks":"Goddev, Fatak Rd, station E","tier":3,"lat":19.2952,"lon":72.86,"src":"manual-fix"},{"id":"S091","name":"Wagle Estate","parent":"Thane/Mulund","landmarks":"Wagle Estate, Kopri, Thane East","tier":3,"lat":19.1985175,"lon":72.9509778,"src":"nominatim"},{"id":"S092","name":"Vartak Nagar","parent":"Thane/Mulund","landmarks":"Pokhran Rd, Vartak Nagar","tier":3,"lat":19.2115972,"lon":72.9616225,"src":"nominatim"},{"id":"S093","name":"Kolshet Rd","parent":"Thane/Mulund","landmarks":"Kolshet, Dhokali","tier":3,"lat":19.2290562,"lon":72.9836731,"src":"nominatim"},{"id":"S094","name":"Kasarvadavali","parent":"Thane/Mulund","landmarks":"Ghodbunder far, Kasarvadavali naka","tier":3,"lat":19.2704158,"lon":72.969082,"src":"nominatim"},{"id":"S095","name":"Mulund East","parent":"Thane/Mulund","landmarks":"Station E, Nahur border, LBS Marg","tier":3,"lat":19.1721366,"lon":72.9566971,"src":"nominatim"},{"id":"S096","name":"Koparkhairane","parent":"Navi Mumbai","landmarks":"Sec 11, station, Thane-Belapur Rd","tier":3,"lat":19.1055907,"lon":72.9982312,"src":"nominatim"},{"id":"S097","name":"Ghansoli","parent":"Navi Mumbai","landmarks":"Talavali, station","tier":3,"lat":19.1165736,"lon":73.0050498,"src":"nominatim"},{"id":"S098","name":"Sanpada \u00b7 Juinagar","parent":"Navi Mumbai","landmarks":"Sanpada station, Juinagar, Palm Beach","tier":3,"lat":19.0669987,"lon":73.0092292,"src":"nominatim"},{"id":"S099","name":"Panvel","parent":"Navi Mumbai","landmarks":"Station, Old Panvel, ST stand","tier":3,"lat":18.9986,"lon":73.1114,"src":"manual-fix"},{"id":"S100","name":"Kamothe \u00b7 Kalamboli","parent":"Navi Mumbai","landmarks":"Kamothe, Kalamboli, Sion-Panvel Hwy","tier":3,"lat":19.0164338,"lon":73.0806552,"src":"nominatim"}];
+const S001_EMBEDDED = {"sector":"S001","name":"Bandra West","updated":"2026-09-24","start":{"name":"Bandra Station (W)","lat":19.0603,"lon":72.8413},"count":85,"totalKm":12.9,"stops":[{"stop":1,"name":"Bespoke Salon","cat":"Hair salon","rating":4.9,"reviews":551,"area":"Turner Road","lat":19.059521,"lon":72.836645,"status":"todo","note":""},{"stop":2,"name":"MIZMAR Thai Spa","cat":"Thai spa","rating":4.6,"reviews":235,"area":"Turner Road","lat":19.059521,"lon":72.836645,"status":"todo","note":""},{"stop":3,"name":"Divine Smiles Dental Clinic","cat":"Dental clinic","rating":4.9,"reviews":352,"area":"Turner Road","lat":19.059521,"lon":72.836645,"status":"todo","note":""},{"stop":4,"name":"I Think Fitness","cat":"Gym","rating":4.5,"reviews":271,"area":"Turner Road","lat":19.059521,"lon":72.836645,"status":"todo","note":""},{"stop":5,"name":"Bawa Zest by Cheron","cat":"Bakery","rating":4.1,"reviews":446,"area":"59 Hill Rd","lat":19.055417,"lon":72.835999,"status":"todo","note":""},{"stop":6,"name":"Moksham Spa Bandra","cat":"Spa","rating":4.5,"reviews":322,"area":"Hill Road","lat":19.055417,"lon":72.835999,"status":"todo","note":""},{"stop":7,"name":"Skiin Ace Clinic","cat":"Skin care clinic","rating":4.8,"reviews":172,"area":"Hill Road","lat":19.055417,"lon":72.835999,"status":"todo","note":""},{"stop":8,"name":"Diva Yoga Studio - Bandra","cat":"Yoga studio","rating":4.5,"reviews":271,"area":"Hill Road","lat":19.055417,"lon":72.835999,"status":"todo","note":""},{"stop":9,"name":"D'Costa Bakery","cat":"Bakery","rating":4.4,"reviews":279,"area":"Bazar Rd","lat":19.054071,"lon":72.831923,"status":"todo","note":""},{"stop":10,"name":"Reset Life India","cat":"Wellness center","rating":4.2,"reviews":384,"area":"KC Marg","lat":19.051217,"lon":72.829552,"status":"todo","note":""},{"stop":11,"name":"House of Croissants","cat":"Cafe","rating":4.8,"reviews":359,"area":"87 Chapel Rd","lat":19.050377,"lon":72.827247,"status":"todo","note":""},{"stop":12,"name":"Ccoral Salon","cat":"Salon","rating":4.6,"reviews":342,"area":"St. John Baptist Road","lat":19.049437,"lon":72.826315,"status":"todo","note":""},{"stop":13,"name":"6262 Fitness","cat":"Gym","rating":4.7,"reviews":148,"area":"Mount Mary Road","lat":19.046043,"lon":72.822183,"status":"todo","note":""},{"stop":14,"name":"Masala Bay","cat":"Restaurant","rating":4.5,"reviews":630,"area":"Taj Lands End, B.J. Rd","lat":19.043396,"lon":72.819529,"status":"todo","note":""},{"stop":15,"name":"Vista","cat":"Restaurant","rating":4.2,"reviews":507,"area":"Taj Lands End, B.J. Rd","lat":19.043396,"lon":72.819529,"status":"todo","note":""},{"stop":16,"name":"House of Nomad","cat":"Bar","rating":4.6,"reviews":639,"area":"Taj Lands End, B.J. Rd","lat":19.043396,"lon":72.819529,"status":"todo","note":""},{"stop":17,"name":"The Bandstand Pantry","cat":"Restaurant","rating":4.2,"reviews":793,"area":"B.J. Rd, Bandstand","lat":19.047469,"lon":72.820047,"status":"todo","note":""},{"stop":18,"name":"La Grace Luxury Skin Clinic","cat":"Skin care clinic","rating":4.9,"reviews":153,"area":"Bandstand Promenade","lat":19.050504,"lon":72.821412,"status":"todo","note":""},{"stop":19,"name":"BANDRA BORN","cat":"Restaurant","rating":4.3,"reviews":585,"area":"Chapel Rd","lat":19.050509,"lon":72.827008,"status":"todo","note":""},{"stop":20,"name":"TAATSU - Japanese Baked Tarts","cat":"Dessert shop","rating":4.8,"reviews":251,"area":"Chapel Rd","lat":19.050761,"lon":72.82724,"status":"todo","note":""},{"stop":21,"name":"Brev\u00e9 Bakery","cat":"Bakery","rating":4,"reviews":826,"area":"Chapel Rd","lat":19.050761,"lon":72.82724,"status":"todo","note":""},{"stop":22,"name":"Haiku","cat":"Cafe","rating":4.6,"reviews":166,"area":"Chapel Rd","lat":19.050761,"lon":72.82724,"status":"todo","note":""},{"stop":23,"name":"Baked In Bombay By Bread Boulevard","cat":"Cafe","rating":4.6,"reviews":551,"area":"Waroda Rd","lat":19.054141,"lon":72.827155,"status":"todo","note":""},{"stop":24,"name":"American Express Bakery","cat":"Bakery","rating":4,"reviews":326,"area":"Hill Rd","lat":19.054639,"lon":72.826724,"status":"todo","note":""},{"stop":25,"name":"Cherry Fig","cat":"Clothing store","rating":4.8,"reviews":207,"area":"Hill Road","lat":19.055052,"lon":72.829128,"status":"todo","note":""},{"stop":26,"name":"7 Wonders Studio","cat":"Unisex salon","rating":4.8,"reviews":581,"area":"Hill Road","lat":19.055055,"lon":72.829239,"status":"todo","note":""},{"stop":27,"name":"Snow Bite Natural Ice Cream","cat":"Ice Cream","rating":4.4,"reviews":486,"area":"Hill Rd","lat":19.054928,"lon":72.829295,"status":"todo","note":""},{"stop":28,"name":"Blanco Bar by the pool","cat":"Bar","rating":4.5,"reviews":165,"area":"Hill Rd","lat":19.054928,"lon":72.829295,"status":"todo","note":""},{"stop":29,"name":"Road House Bluez","cat":"Bar","rating":4.8,"reviews":340,"area":"Hill Rd","lat":19.054928,"lon":72.829295,"status":"todo","note":""},{"stop":30,"name":"Ronak Boutique","cat":"Clothing store","rating":4.8,"reviews":105,"area":"Elco Arcade, Hill Road","lat":19.056282,"lon":72.83312,"status":"todo","note":""},{"stop":31,"name":"Mon\u00e8r Dessert bar","cat":"Bakery","rating":4.7,"reviews":110,"area":"Waterfield Rd","lat":19.059348,"lon":72.83416,"status":"todo","note":""},{"stop":32,"name":"Stand By Coffee","cat":"Cafe","rating":4.4,"reviews":226,"area":"28th Rd","lat":19.060084,"lon":72.834665,"status":"todo","note":""},{"stop":33,"name":"Chala Basuya Bandra","cat":"Bar","rating":4.7,"reviews":178,"area":"Linking Rd","lat":19.06167,"lon":72.836025,"status":"todo","note":""},{"stop":34,"name":"Donna Deli","cat":"Asian","rating":4.1,"reviews":964,"area":"Swami Vivekanand Rd","lat":19.062162,"lon":72.83748,"status":"todo","note":""},{"stop":35,"name":"Achieve Fitness Bandra","cat":"Gym","rating":4.8,"reviews":370,"area":"Waterfield Road","lat":19.064066,"lon":72.834692,"status":"todo","note":""},{"stop":36,"name":"DermaDivine","cat":"Dermatologist","rating":4.9,"reviews":181,"area":"Waterfield Road","lat":19.064066,"lon":72.834692,"status":"todo","note":""},{"stop":37,"name":"Maitri Thai Spa","cat":"Thai spa","rating":4.6,"reviews":315,"area":"Waterfield Road","lat":19.064066,"lon":72.834692,"status":"todo","note":""},{"stop":38,"name":"Spa Nest","cat":"Spa","rating":4.7,"reviews":203,"area":"Waterfield Road","lat":19.064066,"lon":72.834692,"status":"todo","note":""},{"stop":39,"name":"A'Kreations Hair & Beyond","cat":"Hair salon","rating":4.7,"reviews":719,"area":"Waterfield Road","lat":19.064066,"lon":72.834692,"status":"todo","note":""},{"stop":40,"name":"Ritu'S Hair And Beauty Salon","cat":"Salon","rating":4.9,"reviews":621,"area":"Waterfield Road","lat":19.064066,"lon":72.834692,"status":"todo","note":""},{"stop":41,"name":"The Glam Lab Salon","cat":"Salon","rating":4.9,"reviews":738,"area":"Waterfield Road","lat":19.064066,"lon":72.834692,"status":"todo","note":""},{"stop":42,"name":"bru baabaa caf\u00e9","cat":"Coffee shop","rating":4.8,"reviews":212,"area":"29th Rd","lat":19.061588,"lon":72.833501,"status":"todo","note":""},{"stop":43,"name":"Poetry by Love and Cheesecake","cat":"Bakery","rating":4.4,"reviews":938,"area":"Rd No. 24","lat":19.062778,"lon":72.832831,"status":"todo","note":""},{"stop":44,"name":"Le15 Patisserie","cat":"Bakery","rating":4.3,"reviews":895,"area":"16th Rd","lat":19.062549,"lon":72.830874,"status":"todo","note":""},{"stop":45,"name":"Sweegan","cat":"Cake shop","rating":4.9,"reviews":307,"area":"Pali Rd","lat":19.062721,"lon":72.828519,"status":"todo","note":""},{"stop":46,"name":"The Dessert Republic - Bandra","cat":"Dessert shop","rating":4.6,"reviews":528,"area":"Pali Mala Rd","lat":19.062721,"lon":72.828519,"status":"todo","note":""},{"stop":47,"name":"Deliciae by Bunty Mahajan","cat":"Cake shop","rating":4.2,"reviews":853,"area":"St. John's Rd","lat":19.061536,"lon":72.828395,"status":"todo","note":""},{"stop":48,"name":"STAQX Bandra","cat":"Restaurant","rating":4.6,"reviews":312,"area":"near Lilavati Hospital","lat":19.0596,"lon":72.8295,"status":"todo","note":""},{"stop":49,"name":"Steps Caf\u00e9","cat":"Restaurant","rating":4.3,"reviews":842,"area":"Tertulian Rd","lat":19.0596,"lon":72.8295,"status":"todo","note":""},{"stop":50,"name":"VANILLA BEANS","cat":"Bakery","rating":4.7,"reviews":633,"area":"off Station Road","lat":19.0596,"lon":72.8295,"status":"todo","note":""},{"stop":51,"name":"The Protein Secrets Bakery","cat":"Cake shop","rating":4.9,"reviews":163,"area":"Somnath Lane, Hill Rd","lat":19.0596,"lon":72.8295,"status":"todo","note":""},{"stop":52,"name":"Sixteen 33","cat":"Bar","rating":4.4,"reviews":546,"area":"16th and 33rd Rd","lat":19.0596,"lon":72.8295,"status":"todo","note":""},{"stop":53,"name":"Roofberries","cat":"Bar","rating":4.1,"reviews":763,"area":"24th/33rd Rd off Linking Rd","lat":19.0596,"lon":72.8295,"status":"todo","note":""},{"stop":54,"name":"Old Street Cafe & Bar","cat":"Bar","rating":4.3,"reviews":870,"area":"Hill Rd, opp St Andrews Church","lat":19.0596,"lon":72.8295,"status":"todo","note":""},{"stop":55,"name":"Brownie cottage","cat":"Dessert","rating":4.8,"reviews":295,"area":"Off Carter Rd","lat":19.0596,"lon":72.8295,"status":"todo","note":""},{"stop":56,"name":"Miyo Dessert Bar","cat":"Dessert shop","rating":4.7,"reviews":161,"area":"16th/33rd Rd junction","lat":19.0596,"lon":72.8295,"status":"todo","note":""},{"stop":57,"name":"Florian Hurel Hair Couture and Spa","cat":"Hair salon & spa","rating":4.8,"reviews":993,"area":"Sherly Mala Rd","lat":19.0596,"lon":72.8295,"status":"todo","note":""},{"stop":58,"name":"Sally's Day Spa","cat":"Spa","rating":4.9,"reviews":206,"area":"Pali Hill, Waterfield Road","lat":19.0596,"lon":72.8295,"status":"todo","note":""},{"stop":59,"name":"Supen Spa","cat":"Spa","rating":4.8,"reviews":237,"area":"Link Corner Mall, Linking Road","lat":19.0596,"lon":72.8295,"status":"todo","note":""},{"stop":60,"name":"Kingston Spa","cat":"Spa","rating":4.7,"reviews":321,"area":"Linking Road, Navalkunj","lat":19.0596,"lon":72.8295,"status":"todo","note":""},{"stop":61,"name":"Forever Yooung","cat":"Clinic","rating":4.8,"reviews":276,"area":"Imperial Plaza, Linking Road","lat":19.0596,"lon":72.8295,"status":"todo","note":""},{"stop":62,"name":"Bliss Skin and Dental Clinic","cat":"Skin care clinic","rating":4.8,"reviews":475,"area":"Hill Road, opp. Elco","lat":19.0596,"lon":72.8295,"status":"todo","note":""},{"stop":63,"name":"Turbo Fitness","cat":"Gym","rating":4.4,"reviews":212,"area":"33rd Road, off Linking Road","lat":19.0596,"lon":72.8295,"status":"todo","note":""},{"stop":64,"name":"UNFOUND","cat":"Clothing store","rating":4.8,"reviews":101,"area":"Pali Hill, St. Andrews Road","lat":19.0596,"lon":72.8295,"status":"todo","note":""},{"stop":65,"name":"I CAFE","cat":"Cafe","rating":4.7,"reviews":289,"area":"Ranwar, Bandra West","lat":19.059206,"lon":72.829474,"status":"todo","note":""},{"stop":66,"name":"The Nest Bandra","cat":"Cafe","rating":4.1,"reviews":311,"area":"Hill Rd","lat":19.060145,"lon":72.825208,"status":"todo","note":""},{"stop":67,"name":"FloFitBox","cat":"Gym","rating":4.7,"reviews":239,"area":"Carter Road","lat":19.064601,"lon":72.82315,"status":"todo","note":""},{"stop":68,"name":"The Good Stuff","cat":"Cafe","rating":4.9,"reviews":287,"area":"Sherly Rajan Rd","lat":19.065615,"lon":72.824791,"status":"todo","note":""},{"stop":69,"name":"Mahati Wellness","cat":"Yoga studio","rating":4.9,"reviews":162,"area":"Sherly Rajan Road","lat":19.065615,"lon":72.824791,"status":"todo","note":""},{"stop":70,"name":"Skinwood","cat":"Skin care clinic","rating":4.9,"reviews":328,"area":"Pali Hill Road","lat":19.068779,"lon":72.826182,"status":"todo","note":""},{"stop":71,"name":"Grey Soul Coffee Roasters","cat":"Cafe","rating":4.4,"reviews":385,"area":"Dr Ambedkar Rd","lat":19.07013,"lon":72.829312,"status":"todo","note":""},{"stop":72,"name":"TwentySeven Bakehouse","cat":"Bakery","rating":4.4,"reviews":278,"area":"Dr Ambedkar Rd","lat":19.07013,"lon":72.829312,"status":"todo","note":""},{"stop":73,"name":"Hi Tech Dental Clinic Bandra","cat":"Dental clinic","rating":4.9,"reviews":824,"area":"Pali Road","lat":19.068151,"lon":72.832247,"status":"todo","note":""},{"stop":74,"name":"Zenergy","cat":"Yoga studio","rating":4.9,"reviews":210,"area":"33rd Road","lat":19.065895,"lon":72.835213,"status":"todo","note":""},{"stop":75,"name":"Loyka Desserts","cat":"Cafe","rating":4.6,"reviews":797,"area":"33rd Rd","lat":19.065895,"lon":72.835213,"status":"todo","note":""},{"stop":76,"name":"House of Paloma Bandra","cat":"Restaurant","rating":4.5,"reviews":184,"area":"33rd Rd, Linking Rd","lat":19.065895,"lon":72.835213,"status":"todo","note":""},{"stop":77,"name":"Zaro Bakehouse","cat":"Bakery","rating":4.7,"reviews":184,"area":"33rd Rd","lat":19.065895,"lon":72.835213,"status":"todo","note":""},{"stop":78,"name":"Kajal's Yoga Life Studio","cat":"Yoga studio","rating":4.9,"reviews":189,"area":"Guru Gangeshwar Marg","lat":19.069334,"lon":72.835453,"status":"todo","note":""},{"stop":79,"name":"The White Tusk Dental Clinic","cat":"Dental clinic","rating":5,"reviews":230,"area":"14th Road","lat":19.070121,"lon":72.832974,"status":"todo","note":""},{"stop":80,"name":"ESTTHEVA unisex salon","cat":"Unisex salon","rating":4.8,"reviews":286,"area":"14th Road","lat":19.070121,"lon":72.832974,"status":"todo","note":""},{"stop":81,"name":"Dent Heal Bandra","cat":"Dental clinic","rating":4.9,"reviews":401,"area":"16th Road","lat":19.073138,"lon":72.831108,"status":"todo","note":""},{"stop":82,"name":"Blue's Kitchen by Loima","cat":"Thai","rating":4.5,"reviews":950,"area":"16th Rd","lat":19.077149,"lon":72.831096,"status":"todo","note":""},{"stop":83,"name":"Melting Morsels","cat":"Cake shop","rating":4.1,"reviews":194,"area":"16th Rd","lat":19.077149,"lon":72.831096,"status":"todo","note":""},{"stop":84,"name":"Kr\u00e1sa Skin & Hair Clinic","cat":"Skin care clinic","rating":4.8,"reviews":150,"area":"Linking Road","lat":19.078077,"lon":72.834292,"status":"todo","note":""},{"stop":85,"name":"1 Stop Dental Clinic","cat":"Dental clinic","rating":4.9,"reviews":283,"area":"Linking Road","lat":19.078077,"lon":72.834292,"status":"todo","note":""}]};
 let currentSector = null;
 let secmap = null;
 let secMarkers = [];
@@ -708,11 +444,36 @@ let sectorResearchResults = [];
 function sectorById(id){ return SECTORS100.find(function(s){return s.id===id;}); }
 function sectorStops(sid){ return db.sectors[sid] || (db.sectors[sid] = []); }
 
+/* ---------------- transport mode (Walk / Two-wheeler / Car) ----------------
+   Stored in db.transportMode. Affects OSRM routing profile (walking/driving)
+   and Google Maps travelmode (walking/driving — Google has no two-wheeler
+   mode, so two-wheelers use driving). */
+function transportMode(){ return db.transportMode || "twowheeler"; }
+function setTransportMode(m){
+  db.transportMode = m; save();
+  renderTransportPicker();
+  toast(m==="walk" ? "🚶 Walking mode" : m==="car" ? "🚗 Car mode" : "🛵 Two-wheeler mode");
+}
+function renderTransportPicker(){
+  const box = document.getElementById("sec-transport"); if(!box) return;
+  const cur = transportMode();
+  box.querySelectorAll("[data-tm]").forEach(function(b){
+    if(b.getAttribute("data-tm")===cur) b.classList.add("sel");
+    else b.classList.remove("sel");
+  });
+}
+function osrmProfile(){ return transportMode()==="walk" ? "walking" : "driving"; }
+function gmapsTravelMode(){ return transportMode()==="walk" ? "walking" : "driving"; }
+
 async function loadSectors(){
   try{
     const r = await fetch("./sector-data/sectors.json");
     if(r.ok) SECTORS100 = await r.json();
   }catch(e){}
+  // Bulletproof fallback: embedded copy (uploaded root files may miss sector-data/)
+  if(!SECTORS100.length && typeof SECTORS_EMBEDDED!=="undefined" && SECTORS_EMBEDDED.length){
+    SECTORS100 = SECTORS_EMBEDDED;
+  }
   renderSectors();
 }
 function tierPill(tier){
@@ -784,6 +545,8 @@ function renderSectorDetail(){
     list.length? done+" of "+list.length+" visited" : "No stops yet — hit Find businesses";
   document.getElementById("sec-progress").style.width =
     list.length? Math.round(done/list.length*100)+"%" : "0%";
+  renderTransportPicker();
+  renderDayPlan();
   const box = document.getElementById("sec-list");
   if(!list.length){
     box.innerHTML = '<div class="empty">Few businesses mapped here yet — widen the search or add manually.</div>'+
@@ -804,7 +567,7 @@ function renderSectorDetail(){
       ((p.rating&&p.reviews)? '<div class="sub2">★ '+esc(String(p.rating))+' · '+esc(String(p.reviews))+' Google reviews</div>':"")+
       '<div class="sub2">'+esc(p.cat||"")+(p.addr? " · "+esc(p.addr):"")+
         ((p.manual||p.curated)? " · "+(p.manual?"✋ manual":"📂 curated"):"")+'</div></div>'+
-      '<button class="iconbtn" onclick="window.open(\'https://www.google.com/maps/dir/?api=1&destination='+p.lat+','+p.lon+'\',\'_blank\')">🧭</button></div>'+
+      '<button class="iconbtn" onclick="sectorNavigateStop(\''+p.oid+'\')">🧭</button></div>'+
       '<div class="statusbtns">'+sb("pitched","✓ Pitched")+sb("bought","💰 Bought")+sb("no","✗ No")+'</div>'+
       '<input class="notein" placeholder="1-line note…" value="'+esc(p.note||"")+'" onchange="sectorSetNote(\''+p.oid+'\',this.value)">'+
       '</div>';
@@ -821,6 +584,56 @@ function sectorSetNote(oid, v){
   const list = sectorStops(currentSector);
   const p = list.find(function(x){return x.oid===oid;});
   if(p){ p.note = v; save(); }
+}
+/* Per-stop navigation, respecting the chosen transport mode. */
+function sectorNavigateStop(oid){
+  const list = sectorStops(currentSector);
+  const p = list.find(function(x){return x.oid===oid;});
+  if(!p) return;
+  window.open("https://www.google.com/maps/dir/?api=1&destination="+p.lat+","+p.lon+
+    "&travelmode="+gmapsTravelMode(),"_blank");
+}
+/* "Take me to the sector": Google Maps transit (train/bus) directions from
+   your location to stop 1 of the route, or the sector center if no route
+   is built yet. GPS failure falls back to the route's start point. */
+async function sectorTakeMeThere(){
+  const s = sectorById(currentSector); if(!s) return;
+  toast("Getting your location…");
+  let origin = null;
+  try{
+    const p = await getPos(9000);
+    origin = p.lat+","+p.lon;
+  }catch(e){
+    const meta = db.sectorMeta && db.sectorMeta[s.id];
+    if(meta && meta.startLat) origin = meta.startLat+","+meta.startLon;
+  }
+  const ordered = (db.sectors[s.id]||[]).filter(function(p){return p.order;})
+    .sort(function(a,b){return a.order-b.order;});
+  let destLat, destLon, destLabel, note="";
+  if(ordered.length){
+    destLat = ordered[0].lat; destLon = ordered[0].lon; destLabel = ordered[0].name;
+  } else {
+    destLat = s.lat; destLon = s.lon; destLabel = s.name+" center";
+    note = " — build your route first for stop-to-stop navigation";
+  }
+  let url = "https://www.google.com/maps/dir/?api=1";
+  if(origin) url += "&origin="+origin;
+  url += "&destination="+destLat+","+destLon+"&travelmode=transit";
+  toast("Opening train/bus directions to "+destLabel+note);
+  window.open(url,"_blank");
+}
+/* Day-plan header: total distance, stop count, first stop name. */
+function renderDayPlan(){
+  const s = sectorById(currentSector); if(!s) return;
+  const el = document.getElementById("sec-dayplan"); if(!el) return;
+  const meta = db.sectorMeta && db.sectorMeta[s.id];
+  if(meta && meta.dayStops){
+    el.innerHTML = "📋 Day plan: <b>"+meta.dayStops+" stops</b> · <b>"+meta.dayDistKm+
+      " km</b> · starts at <b>"+esc(meta.dayFirst||"")+"</b>";
+  } else {
+    const n = (db.sectors[s.id]||[]).length;
+    el.innerHTML = n ? "Build the route to get your day plan 🧭" : "";
+  }
 }
 
 /* ---------------- live 3D map (MapLibre GL) ---------------- */
@@ -1184,6 +997,10 @@ async function sectorCuratedData(s){
       if(r.ok){ raw = await r.json(); break; }
     }catch(e){}
   }
+  // Bulletproof fallback: embedded S001 copy
+  if(!raw && s.id==="S001" && typeof S001_EMBEDDED!=="undefined" && S001_EMBEDDED){
+    raw = S001_EMBEDDED;
+  }
   let arr = [];
   if(raw){
     const items = Array.isArray(raw) ? raw : (raw.stops || []);
@@ -1244,12 +1061,23 @@ async function sectorBuildRoute(){
   catch(e){ start = {lat:s.lat, lon:s.lon}; toast("GPS off — starting from sector center"); }
   toast("Optimizing "+list.length+" stops…");
   const pts = list.map(function(p){return {lat:p.lat, lon:p.lon};});
-  const matrix = pts.length<=100 ? await osrmTable(start, pts) : null;
+  const matrix = pts.length<=100 ? await osrmTable(start, pts, osrmProfile()) : null;
   const order = routeOrder(matrix, start, pts);
   order.forEach(function(pi,i){ list[pi].order = i+1; });
   list.sort(function(a,b){return (a.order||9999)-(b.order||9999);});
+  // total day distance along the ordered route (OSRM meters, else haversine)
+  let totalM = 0, prev = 0;
+  order.forEach(function(pi){
+    const mi = pi+1;
+    let d;
+    if(matrix && matrix[prev] && matrix[prev][mi]!=null) d = matrix[prev][mi];
+    else d = hav(prev===0?start:pts[prev-1], pts[pi])*1000;
+    totalM += d; prev = mi;
+  });
   db.sectorMeta = db.sectorMeta||{};
-  db.sectorMeta[s.id] = {startLat:start.lat, startLon:start.lon};
+  db.sectorMeta[s.id] = { startLat:start.lat, startLon:start.lon,
+    dayDistKm: Math.round(totalM/100)/10, dayStops: list.length,
+    dayFirst: list[0] ? list[0].name : "" };
   save(); renderSectorDetail(); drawSectorMarkers();
   toast("Route ready — stop 1 → stop "+list.length+" 🧭");
 }
@@ -1262,7 +1090,7 @@ function sectorOpenMapsChunk(){
   const origin = meta.startLat+","+meta.startLon;
   const dest = list[list.length-1].lat+","+list[list.length-1].lon;
   const wp = list.slice(0,-1).map(function(p){return p.lat+","+p.lon;}).join("|");
-  let url = "https://www.google.com/maps/dir/?api=1&origin="+origin+"&destination="+dest+"&travelmode=driving";
+  let url = "https://www.google.com/maps/dir/?api=1&origin="+origin+"&destination="+dest+"&travelmode="+gmapsTravelMode();
   if(wp) url += "&waypoints="+encodeURIComponent(wp);
   window.open(url,"_blank");
 }
