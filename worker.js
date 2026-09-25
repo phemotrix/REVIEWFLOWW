@@ -168,7 +168,9 @@ export default {
 
     if(req.method === "OPTIONS") return corsPreflight();
 
-    /* ---- public: business config ---- */
+    /* ---- public: business config ----
+       Returns the stored config FLAT (top level), exactly as the admin app
+       saved it — tap.html reads config.questions / config.name directly. */
     if(path === "/config" && req.method === "GET"){
       if(rateLimited("cfg:" + ip, LIMITS.config.max, LIMITS.config.windowMs)) return tooMany();
       const biz = url.searchParams.get("biz") || "";
@@ -176,12 +178,7 @@ export default {
       try{
         const cfg = await env.BUSINESS_CONFIGS.get("biz:" + biz, "json");
         if(!cfg) return json({ ok:false, error:"Unknown business." }, 404);
-        return json({ ok:true, config:{
-          business_name: cfg.business_name || "",
-          business_category: cfg.business_category || "",
-          google_review_url: cfg.google_review_url || "",
-          questions: Array.isArray(cfg.questions) ? cfg.questions.slice(0, 15) : []
-        }});
+        return json(cfg);
       }catch(e){
         return json({ ok:false, error:"Temporarily unavailable." }, 503);
       }
@@ -211,21 +208,23 @@ export default {
     if(path === "/admin/save" && req.method === "POST"){
       let body = null;
       try{ body = await req.json(); }catch(e){ return json({ ok:false, error:"Bad request." }, 400); }
-      const biz = body && body.biz;
+      const biz = body && (body.biz || body.id); /* admin app sends { id, config } */
       const cfg = body && body.config;
       if(!validBiz(biz) || !cfg || typeof cfg !== "object"){
         return json({ ok:false, error:"Bad request." }, 400);
       }
+      /* Preserve the fields the admin app + tap page actually use. */
       const clean = {
-        business_name: String(cfg.business_name || "").slice(0, 80),
-        business_category: String(cfg.business_category || "").slice(0, 40),
-        google_review_url: String(cfg.google_review_url || "").slice(0, 500),
+        name: String(cfg.name || cfg.business_name || "").slice(0, 80),
+        color: String(cfg.color || "#d8a94e").slice(0, 20),
+        welcome: String(cfg.welcome || "").slice(0, 300),
+        google_link: String(cfg.google_link || cfg.google_review_url || "").slice(0, 500),
         questions: Array.isArray(cfg.questions)
           ? cfg.questions.filter(function(q){ return typeof q === "string"; })
               .map(function(q){ return q.slice(0, 200); }).slice(0, 15)
           : []
       };
-      if(!clean.business_name.trim()) return json({ ok:false, error:"Bad request." }, 400);
+      if(!clean.name.trim()) return json({ ok:false, error:"Bad request." }, 400);
       try{
         await env.BUSINESS_CONFIGS.put("biz:" + biz, JSON.stringify(clean));
         return json({ ok:true });
@@ -237,7 +236,7 @@ export default {
     if(path === "/admin/get" && req.method === "POST"){
       let body = null;
       try{ body = await req.json(); }catch(e){ return json({ ok:false, error:"Bad request." }, 400); }
-      const biz = body && body.biz;
+      const biz = body && (body.biz || body.id);
       if(!validBiz(biz)) return json({ ok:false, error:"Bad request." }, 400);
       try{
         const cfg = await env.BUSINESS_CONFIGS.get("biz:" + biz, "json");

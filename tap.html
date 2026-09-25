@@ -7,83 +7,9 @@
 <meta name="theme-color" content="#0d0b08">
 <!-- No manifest link: the customer tap page must NOT offer installing the admin app. -->
 <link rel="icon" href="icon.svg">
-<style>
-:root{
-  --brand:#d8a94e;
-  --bg:#0d0b08;
-  --card:rgba(255,255,255,.045);
-  --text:#f5efe4;
-  --muted:#a89f8d;
-}
-*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
-body{
-  margin:0;color:var(--text);
-  background:radial-gradient(1200px 600px at 50% -10%, #241c10 0%, var(--bg) 55%) fixed, var(--bg);
-  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Inter,Arial,sans-serif;
-  min-height:100vh;
-}
-#app{max-width:480px;margin:0 auto;padding:28px 20px 44px;min-height:100vh;display:flex}
-.screen{display:none;width:100%;flex-direction:column;justify-content:center;animation:fade .35s ease}
-.screen.active{display:flex}
-@keyframes fade{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
-.brandmark{
-  width:56px;height:56px;border-radius:17px;flex:none;
-  background:linear-gradient(135deg,var(--brand),#8a5f1c);
-  display:flex;align-items:center;justify-content:center;font-size:27px;
-  box-shadow:0 8px 30px rgba(216,169,78,.28);margin-bottom:20px;
-}
-h1{font-size:30px;margin:0 0 10px;letter-spacing:-.5px;line-height:1.2}
-.sub{color:var(--muted);font-size:16px;line-height:1.55;margin:0 0 30px}
-.tiny{color:var(--muted);font-size:13px;margin-top:18px;text-align:center}
-.btn{
-  background:linear-gradient(135deg,var(--brand),#b57f2a);color:#1a1206;border:0;
-  border-radius:16px;padding:16px;font-size:17px;font-weight:700;width:100%;cursor:pointer;
-  box-shadow:0 10px 30px rgba(216,169,78,.25);
-}
-.btn:active{transform:scale(.98)}
-.btn.ghost{background:var(--card);color:var(--text);box-shadow:none;border:1px solid rgba(255,255,255,.09);margin-top:12px}
-.hidden{display:none!important}
-.progress{height:6px;background:rgba(255,255,255,.08);border-radius:99px;overflow:hidden;margin-bottom:14px}
-.progress-fill{height:100%;width:0;background:linear-gradient(90deg,var(--brand),#f3d08a);border-radius:99px;transition:width .4s ease}
-.qcount{color:var(--muted);font-size:12px;margin-bottom:10px;letter-spacing:1.5px;text-transform:uppercase}
-.qtext{font-size:24px;line-height:1.35;margin:0 0 24px;letter-spacing:-.3px}
-#qcard.slide{animation:slidein .3s ease}
-@keyframes slidein{from{opacity:0;transform:translateX(24px)}to{opacity:1;transform:none}}
-.emojis{display:flex;justify-content:space-between;gap:8px}
-.emoji{
-  flex:1;font-size:32px;background:var(--card);border:1px solid rgba(255,255,255,.07);
-  border-radius:16px;padding:14px 0;cursor:pointer;transition:transform .15s,border-color .15s;
-}
-.emoji.sel{border-color:var(--brand);background:rgba(216,169,78,.14);transform:scale(1.07)}
-.emoji-labels{display:flex;justify-content:space-between;color:var(--muted);font-size:12px;margin-top:10px;padding:0 4px}
-.chips{display:flex;flex-wrap:wrap;gap:10px}
-.chip{
-  background:var(--card);border:1px solid rgba(255,255,255,.09);color:var(--text);
-  border-radius:99px;padding:13px 19px;font-size:15px;cursor:pointer;transition:all .15s;
-}
-.chip.sel{background:rgba(216,169,78,.16);border-color:var(--brand);color:#ffe9bd}
-#qcontinue{margin-top:24px}
-textarea#reviewText{
-  width:100%;min-height:190px;background:var(--card);border:1px solid rgba(255,255,255,.1);
-  border-radius:16px;color:var(--text);font-size:16px;line-height:1.6;padding:16px;
-  font-family:inherit;resize:vertical;
-}
-.hint{color:var(--muted);font-size:13px;margin:10px 0 22px;line-height:1.5}
-h2.rtitle{font-size:24px;margin:0 0 14px;letter-spacing:-.3px}
-.pulse{font-size:52px;animation:pulse 1.4s ease-in-out infinite;text-align:center}
-@keyframes pulse{0%,100%{transform:scale(1);opacity:.7}50%{transform:scale(1.15);opacity:1}}
-.center{text-align:center}
-.bigcheck{
-  width:84px;height:84px;border-radius:50%;margin:0 auto 22px;flex:none;
-  background:linear-gradient(135deg,var(--brand),#8a5f1c);color:#1a1206;font-size:40px;
-  display:flex;align-items:center;justify-content:center;box-shadow:0 10px 34px rgba(216,169,78,.3);
-}
-.dots span{display:inline-block;animation:blink 1.2s infinite}
-.dots span:nth-child(2){animation-delay:.2s}.dots span:nth-child(3){animation-delay:.4s}
-@keyframes blink{0%,100%{opacity:.2}50%{opacity:1}}
-</style>
+<link rel="stylesheet" href="theme.css">
 </head>
-<body>
+<body class="tap">
 <div id="app">
 
   <!-- LOADING -->

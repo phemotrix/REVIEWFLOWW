@@ -383,13 +383,34 @@ function getPos(ms){
     );
   });
 }
+/* OSRM distance table, cached 24h in localStorage (keyed by profile+route).
+   Repeat route builds are instant and never hit the public server twice. */
+function osrmKey(profile, coords){
+  let h = 5381;
+  const str = profile+"|"+coords;
+  for(let i=0;i<str.length;i++){ h = (((h<<5)+h)+str.charCodeAt(i))|0; }
+  return "o"+(h>>>0).toString(36);
+}
 async function osrmTable(start, pts, profile){
+  profile = profile||"driving";
+  const coords = [start].concat(pts).map(function(p){
+    return p.lon.toFixed(5)+","+p.lat.toFixed(5);
+  }).join(";");
+  db.ocache = db.ocache||{};
+  const key = osrmKey(profile, coords);
+  const hit = db.ocache[key];
+  if(hit && hit.m && (Date.now()-hit.ts < 24*3600*1000)) return hit.m;
   try{
-    const coords = [start].concat(pts).map(function(p){return p.lon+","+p.lat;}).join(";");
-    const r = await fetch("https://router.project-osrm.org/table/v1/"+(profile||"driving")+"/"+
+    const r = await fetch("https://router.project-osrm.org/table/v1/"+profile+"/"+
       coords+"?annotations=distance");
     const d = await r.json();
-    if(d && d.code==="Ok" && d.distances) return d.distances;
+    if(d && d.code==="Ok" && d.distances){
+      db.ocache[key] = {ts:Date.now(), m:d.distances};
+      const ks = Object.keys(db.ocache);
+      if(ks.length > 30) delete db.ocache[ks[0]];
+      try{ save(); }catch(e){}
+      return d.distances;
+    }
   }catch(e){}
   return null;
 }
@@ -528,7 +549,12 @@ function openSector(id, autoLoad){
   renderSectorDetail();
   sectorCuratedProbe();
   initSecMap(s);
-  if(autoLoad) sectorLoadCurated();
+  if(autoLoad){
+    sectorLoadCurated();
+  } else if(!sectorStops(s.id).length && hasPack(s.id)){
+    // tap sector → curated stops appear instantly with their 1..N order
+    sectorLoadCurated(true);
+  }
   document.getElementById("sectorview").scrollTop = 0;
 }
 function closeSector(){
@@ -552,6 +578,7 @@ function renderSectorDetail(){
     list.length? Math.round(done/list.length*100)+"%" : "0%";
   renderTransportPicker();
   renderDayPlan();
+  renderMapStyleBtn();
   const box = document.getElementById("sec-list");
   if(!list.length){
     box.innerHTML = '<div class="empty">Few businesses mapped here yet — widen the search or add manually.</div>'+
@@ -569,6 +596,7 @@ function renderSectorDetail(){
     }
     return '<div class="card"><div class="row">'+nb+'<div class="grow">'+
       '<div class="name" style="font-size:15px">'+esc(p.name)+'</div>'+
+      (p.legKm!=null? '<div class="sub2" style="color:var(--brand)">→ '+p.legKm+' km</div>':"")+
       ((p.rating&&p.reviews)? '<div class="sub2">★ '+esc(String(p.rating))+' · '+esc(String(p.reviews))+' Google reviews</div>':"")+
       '<div class="sub2">'+esc(p.cat||"")+(p.addr? " · "+esc(p.addr):"")+
         ((p.manual||p.curated)? " · "+(p.manual?"✋ manual":"📂 curated"):"")+'</div></div>'+
@@ -634,14 +662,56 @@ function renderDayPlan(){
   const meta = db.sectorMeta && db.sectorMeta[s.id];
   if(meta && meta.dayStops){
     el.innerHTML = "📋 Day plan: <b>"+meta.dayStops+" stops</b> · <b>"+meta.dayDistKm+
-      " km</b> · starts at <b>"+esc(meta.dayFirst||"")+"</b>";
+      " km</b> · starts at <b>"+esc(meta.dayFirst||"")+"</b><br>"+
+      '<span class="sub2">📍 Nearest-first order from your GPS location</span>';
   } else {
     const n = (db.sectors[s.id]||[]).length;
     el.innerHTML = n ? "Build the route to get your day plan 🧭" : "";
   }
 }
 
-/* ---------------- live 3D map (MapLibre GL) ---------------- */
+/* ---------------- live 3D map (MapLibre GL) ----------------
+   Two styles: 🛰 Satellite (Esri World Imagery + real 3D buildings +
+   place labels + sky = looks REAL) and 🌙 Dark (the old gold-on-black).
+   Default is Satellite. */
+function mapStyleMode(){ return db.mapStyle || "sat"; }
+function satStyle(){
+  return {
+    version:8,
+    sources:{
+      "esri-sat":{type:"raster",
+        tiles:["https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"],
+        tileSize:256, maxzoom:19, attribution:"Imagery © Esri, Maxar, Earthstar Geographics"},
+      "esri-ref":{type:"raster",
+        tiles:["https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}"],
+        tileSize:256, maxzoom:19, attribution:"© Esri"},
+      "omtiles":{type:"vector", url:"https://tiles.openfreemap.org/planet",
+        attribution:"© OpenMapTiles © OpenStreetMap contributors"}
+    },
+    layers:[
+      {id:"sat", type:"raster", source:"esri-sat", minzoom:0, maxzoom:22},
+      {id:"real-3d", type:"fill-extrusion", source:"omtiles", "source-layer":"building",
+        minzoom:13.5,
+        paint:{
+          "fill-extrusion-color":"#dfe3e6",
+          "fill-extrusion-height":["interpolate",["linear"],["zoom"],13.5,0,15,["coalesce",["get","render_height"],14]],
+          "fill-extrusion-base":["coalesce",["get","render_min_height"],0],
+          "fill-extrusion-opacity":0.8
+        }},
+      {id:"ref", type:"raster", source:"esri-ref", minzoom:0, maxzoom:22}
+    ]
+  };
+}
+function toggleMapStyle(){
+  db.mapStyle = mapStyleMode()==="sat" ? "dark" : "sat";
+  save(); renderMapStyleBtn();
+  const s = sectorById(currentSector);
+  if(s){ destroySecMap(); initSecMap(s); }
+}
+function renderMapStyleBtn(){
+  const b = document.getElementById("mapstyle-btn"); if(!b) return;
+  b.textContent = mapStyleMode()==="sat" ? "🌙 Dark map" : "🛰 Satellite map";
+}
 function destroySecMap(){
   try{ secMarkers.forEach(function(m){ m.remove(); }); }catch(e){}
   secMarkers = [];
@@ -657,14 +727,21 @@ function initSecMap(s){
   try{
     secmap = new maplibregl.Map({
       container:"secmap",
-      style:"https://tiles.openfreemap.org/styles/dark",
+      style: mapStyleMode()==="sat" ? satStyle() : "https://tiles.openfreemap.org/styles/dark",
       center:[s.lon, s.lat],
       zoom:14.2, pitch:60, bearing:-15
     });
     secmap.addControl(new maplibregl.NavigationControl(), "top-right");
     secmap.on("load", function(){
       try{
-        if(!secmap.getLayer("vortrix-3d")){
+        if(mapStyleMode()==="sat"){
+          // sky + soft light on satellite so 3D buildings look photographic
+          if(secmap.setSky) secmap.setSky({"sky-color":"#9fc5e8","horizon-color":"#e8f1f8",
+            "fog-color":"#d8e6f2","fog-ground-blend":0.4,
+            "horizon-fog-blend":0.3,"sky-horizon-blend":0.6,
+            "atmosphere-blend":["interpolate",["linear"],["zoom"],0,1,14,0.4]});
+          secmap.setLight({color:"#ffffff", intensity:0.5, position:[1.5,180,80]});
+        } else if(!secmap.getLayer("vortrix-3d")){
           secmap.addLayer({
             id:"vortrix-3d",
             source:"openmaptiles",
@@ -721,8 +798,12 @@ function drawSectorMarkers(){
       } else if(ordered.length>1){
         secmap.addSource("sec-route", {type:"geojson", data:data});
         secmap.addLayer({
+          id:"sec-route-casing", type:"line", source:"sec-route",
+          paint:{"line-color":"#ffffff","line-width":8,"line-opacity":0.9}
+        });
+        secmap.addLayer({
           id:"sec-route-line", type:"line", source:"sec-route",
-          paint:{"line-color":"#d8a94e","line-width":4,"line-opacity":0.85}
+          paint:{"line-color":"#d8a94e","line-width":4,"line-opacity":0.95}
         });
       }
     }catch(e){}
@@ -739,16 +820,51 @@ function drawSectorMarkers(){
 }
 
 /* ---------------- live business discovery (Overpass) ---------------- */
-function sectorOverpassQL(s, radius){
+/* ---------------- niche-wise discovery ----------------
+   The 15 pitch niches, each mapped to OSM tags. "Find businesses" scans
+   ALL businesses of the SELECTED niches in the sector — not a fixed list. */
+const NICHES = [
+  {id:"salon",   label:"💇 Salons",        q:['nwr["shop"~"^(hairdresser|beauty|cosmetics)$"]','nwr["amenity"="beauty"]']},
+  {id:"spa",     label:"💆 Spas",          q:['nwr["shop"="massage"]','nwr["amenity"~"^(spa|sauna)$"]']},
+  {id:"gym",     label:"🏋️ Gyms",          q:['nwr["amenity"="gym"]','nwr["leisure"="fitness_centre"]']},
+  {id:"dental",  label:"🦷 Dental",        q:['nwr["amenity"="dentist"]']},
+  {id:"skin",    label:"✨ Skin clinics",  q:['nwr["amenity"~"^(clinic|doctors)$"]','nwr["healthcare"~"^(clinic|doctor)$"]']},
+  {id:"food",    label:"🍽️ Restaurants",   q:['nwr["amenity"~"^(restaurant|cafe|fast_food|bar|ice_cream|food_court)$"]']},
+  {id:"tattoo",  label:"🖋️ Tattoo",        q:['nwr["shop"="tattoo"]']},
+  {id:"bakery",  label:"🧁 Bakeries",      q:['nwr["shop"~"^(bakery|pastry|confectionery)$"]']},
+  {id:"pet",     label:"🐾 Pet grooming", q:['nwr["shop"~"^(pet|pet_grooming)$"]']},
+  {id:"lab",     label:"🧪 Diag. labs",   q:['nwr["healthcare"="laboratory"]']},
+  {id:"physio",  label:"🦵 Physio",        q:['nwr["healthcare"="physiotherapist"]']},
+  {id:"boutique",label:"👗 Boutiques",     q:['nwr["shop"~"^(clothes|boutique|fashion|shoes)$"]']},
+  {id:"car",     label:"🚗 Car detailing",q:['nwr["shop"="car_repair"]','nwr["amenity"="car_wash"]']},
+  {id:"banquet", label:"🎪 Banquets",      q:['nwr["amenity"~"^(events_venue|conference_centre)$"]','nwr["tourism"="hotel"]']},
+  {id:"coaching",label:"📚 Coaching",      q:['nwr["office"="educational_institution"]','nwr["amenity"~"^(college|school|music_school|driving_school|language_school)$"]']}
+];
+function nicheLabel(id){
+  const n = NICHES.find(function(x){return x.id===id;});
+  return n ? n.label : id;
+}
+let lastNicheIds = null;
+function sectorOverpassQL(s, radius, nicheIds){
   radius = radius || 2000;
   const r = radius+","+s.lat+","+s.lon;
-  return "[out:json][timeout:35];("+
-    'nwr["shop"~"^(clothes|shoes|jewelry|beauty|cosmetics|hairdresser|massage|bakery|pastry|confectionery|florist|gift|optician|mobile_phone|electronics|furniture|books|bicycle|car|motorcycle|travel_agency|department_store|supermarket|mall)$"](around:'+r+");"+
-    'nwr["amenity"~"^(restaurant|cafe|fast_food|bar|ice_cream|beauty|dentist|doctors|clinic|pharmacy|gym|spa)$"](around:'+r+");"+
-    'nwr["leisure"="fitness_centre"](around:'+r+");"+
-    'nwr["tourism"="hotel"](around:'+r+");"+
-    'nwr["office"](around:'+r+");"+
-    ");out center 150;";
+  let frags;
+  if(nicheIds && nicheIds.length){
+    frags = [];
+    nicheIds.forEach(function(id){
+      const n = NICHES.find(function(x){return x.id===id;});
+      if(n) n.q.forEach(function(f){ frags.push(f+'(around:'+r+");"); });
+    });
+  } else {
+    frags = [
+      'nwr["shop"~"^(clothes|shoes|jewelry|beauty|cosmetics|hairdresser|massage|bakery|pastry|confectionery|florist|gift|optician|mobile_phone|electronics|furniture|books|bicycle|car|motorcycle|travel_agency|department_store|supermarket|mall)$"](around:'+r+");",
+      'nwr["amenity"~"^(restaurant|cafe|fast_food|bar|ice_cream|beauty|dentist|doctors|clinic|pharmacy|gym|spa)$"](around:'+r+");",
+      'nwr["leisure"="fitness_centre"](around:'+r+");",
+      'nwr["tourism"="hotel"](around:'+r+");",
+      'nwr["office"](around:'+r+");"
+    ];
+  }
+  return "[out:json][timeout:35];("+frags.join("")+");out center 150;";
 }
 async function overpassFetch(ql, onStage){
   const urls = [
@@ -850,26 +966,83 @@ function mergeProspects(base, extra){
   base.sort(function(a,b){ return a.dist-b.dist; });
   return base.slice(0,150);
 }
-async function sectorResearch(){
+/* "Find businesses" → niche picker first, then the scan runs on the
+   SELECTED niches only. Scans ALL businesses of those niches in the sector. */
+function sectorResearch(){
   const s = sectorById(currentSector); if(!s) return;
+  const saved = (db.niches && db.niches[s.id]) || NICHES.map(function(n){return n.id;});
+  const chips = NICHES.map(function(n){
+    const on = saved.indexOf(n.id)>=0;
+    return '<label class="nichechip'+(on?" on":"")+'"><input type="checkbox" data-niche="'+n.id+'"'+
+      (on?" checked":"")+'><span>'+n.label+'</span></label>';
+  }).join("");
+  openModal('<h3>🎯 Pick niches — '+esc(s.name)+'</h3>'+
+    '<p class="hintline">Scans <b>ALL</b> businesses of these niches in this sector (live OSM data).</p>'+
+    '<div class="nichegrid">'+chips+'</div>'+
+    '<div class="btnrow"><button class="btn ghost small" onclick="nicheCheckAll(true)">Select all</button>'+
+    '<button class="btn ghost small" onclick="nicheCheckAll(false)">Clear</button></div>'+
+    '<div class="btnrow"><button class="btn" onclick="nicheStartSearch(false)">🔍 Search</button>'+
+    '<button class="btn ghost" onclick="nicheStartSearch(true)">↻ Live rescan</button></div>'+
+    '<div class="btnrow"><button class="btn ghost" onclick="closeModal()">Close</button></div>');
+  document.querySelectorAll('#modal [data-niche]').forEach(function(cb){
+    cb.addEventListener("change", function(){
+      cb.closest(".nichechip").classList.toggle("on", cb.checked);
+    });
+  });
+}
+function nicheCheckAll(v){
+  document.querySelectorAll('#modal [data-niche]').forEach(function(cb){
+    cb.checked=v; cb.closest(".nichechip").classList.toggle("on",v);
+  });
+}
+function nicheStartSearch(force){
+  const ids = [];
+  document.querySelectorAll('#modal [data-niche]:checked').forEach(function(cb){
+    ids.push(cb.getAttribute("data-niche"));
+  });
+  if(!ids.length){ toast("Pick at least 1 niche"); return; }
+  const s = sectorById(currentSector); if(!s) return;
+  db.niches = db.niches||{}; db.niches[s.id]=ids; save();
+  lastNicheIds = ids;
+  closeModal();
+  sectorRunResearch(ids, force);
+}
+async function sectorRunResearch(nicheIds, force){
+  const s = sectorById(currentSector); if(!s) return;
+  nicheIds = nicheIds || lastNicheIds || NICHES.map(function(n){return n.id;});
+  // 7-day scrape cache — repeat scans are instant
+  const ck = s.id+"|"+nicheIds.slice().sort().join(",");
+  db.rcache = db.rcache||{};
+  const hit = db.rcache[ck];
+  if(!force && hit && hit.results && hit.results.length && (Date.now()-hit.ts < 7*24*3600*1000)){
+    sectorResearchResults = hit.results;
+    toast("Cached scan loaded ✓ (7-day)");
+    showSectorResearchModal(s, "cached scan ✓");
+    return;
+  }
+  const nicheNames = nicheIds.map(nicheLabel).join(" ");
   const box = osmLoadingBox('🔍 Finding businesses in '+esc(s.name),
-    'Scanning <b>live OSM data</b> within ~2 km — restaurants, cafes, salons, clinics, gyms, hotels & shops…<br>'+
+    'Scanning <b>live OSM data</b> within ~2 km — '+esc(nicheNames)+'<br>'+
     '<b>No review counts</b> — OSM doesn\'t have them. Coverage varies by area.');
   try{
-    let results = collectSectorProspects(s, await overpassFetch(sectorOverpassQL(s), function(a){ box.attempt(a); }));
+    let results = collectSectorProspects(s, await overpassFetch(sectorOverpassQL(s, 2000, nicheIds), function(a){ box.attempt(a); }));
     let radiusNote = "~2 km";
     if(results.length < 20){
       // thin coverage — auto-retry once with a wider radius, then merge
       const el = document.getElementById("osmstage");
       if(el) el.textContent = "Few spots nearby — auto-widening to ~3.5 km…";
       try{
-        const d2 = await overpassFetch(sectorOverpassQL(s, 3500), function(a){ box.attempt(a); });
+        const d2 = await overpassFetch(sectorOverpassQL(s, 3500, nicheIds), function(a){ box.attempt(a); });
         results = mergeProspects(results, collectSectorProspects(s, d2));
         radiusNote = "few spots nearby — auto-widened to ~3.5 km";
       }catch(e2){ /* keep first-pass results */ }
     }
     box.done();
     sectorResearchResults = results;
+    db.rcache[ck] = {ts:Date.now(), results:results};
+    const ckeys = Object.keys(db.rcache);
+    if(ckeys.length > 25) delete db.rcache[ckeys[0]];
+    save();
     if(!sectorResearchResults.length){
       openModal('<h3>Nothing found here yet</h3>'+
         '<p class="hintline">Few businesses mapped here yet — widen the search or add manually.</p>'+
@@ -884,7 +1057,7 @@ async function sectorResearch(){
     openModal('<h3>Search failed</h3>'+
       '<p class="hintline">'+esc(String((e&&e.message)||e))+'<br>Overpass (the OSM server) can be slow or rate-limited. Check your connection and retry.</p>'+
       '<div class="btnrow"><button class="btn" onclick="closeModal()">Close</button>'+
-      '<button class="btn ghost" onclick="sectorResearch()">↻ Retry</button></div>');
+      '<button class="btn ghost" onclick="sectorRunResearch(null,true)">↻ Retry</button></div>');
   }
 }
 /* Manual "widen search" — re-run discovery at 5 km and merge anything new. */
@@ -893,7 +1066,8 @@ async function sectorWidenSearch(){
   const box = osmLoadingBox('🌐 Widening search…',
     'Pulling live OSM data within ~5 km of '+esc(s.name)+'. Bigger area = slower.');
   try{
-    const fresh = collectSectorProspects(s, await overpassFetch(sectorOverpassQL(s, 5000), function(a){ box.attempt(a); }));
+    const niches = (db.niches && db.niches[s.id]) || null;
+    const fresh = collectSectorProspects(s, await overpassFetch(sectorOverpassQL(s, 5000, niches), function(a){ box.attempt(a); }));
     box.done();
     sectorResearchResults = mergeProspects(sectorResearchResults, fresh);
     if(!sectorResearchResults.length){
@@ -1059,6 +1233,7 @@ function normalizePackStops(raw){
       addr:it.addr||it.a||it.area||it.address||"",
       lat:lat, lon:lon,
       rating:it.rating||it.r||null, reviews:it.reviews||it.v||null,
+      stopOrder:(it.stop||it.order||null),
       curated:true
     };
   }).filter(Boolean);
@@ -1199,26 +1374,32 @@ function sectorCuratedProbe(){
     if(b) b.style.display = arr.length? "" : "none";
   });
 }
-async function sectorLoadCurated(){
+async function sectorLoadCurated(silent){
   const s = sectorById(currentSector); if(!s) return;
   const arr = await sectorCuratedData(s);
-  if(!arr.length){ toast("No curated list for this sector"); return; }
+  if(!arr.length){ if(!silent) toast("No curated list for this sector"); return; }
   const list = sectorStops(s.id);
-  let added = 0;
+  let added = 0, refreshed = 0;
   arr.forEach(function(c){
     const norm = c.name.toLowerCase().trim();
-    const dup = list.some(function(p){
+    const dup = list.find(function(p){
       return p.oid===c.oid || (p.name||"").toLowerCase().trim()===norm;
     });
     if(!dup){
       list.push({ oid:c.oid, name:c.name, cat:c.cat, lat:c.lat, lon:c.lon,
         addr:c.addr, rating:c.rating, reviews:c.reviews,
-        status:"new", note:"", order:null, curated:true });
+        status:"new", note:"", order:(c.stopOrder||null), curated:true });
       added++;
+    } else if(dup.curated){
+      // refresh embedded data — fixes old stacked pins / missing order
+      dup.lat=c.lat; dup.lon=c.lon; dup.addr=c.addr||dup.addr;
+      dup.rating=c.rating; dup.reviews=c.reviews;
+      if(!dup.order && c.stopOrder) dup.order=c.stopOrder;
+      refreshed++;
     }
   });
   save(); renderSectorDetail(); drawSectorMarkers();
-  toast(added? added+" curated spots added 📂" : "Curated list already loaded ✓");
+  if(!silent) toast(added? added+" curated spots added 📂" : (refreshed? "Curated list refreshed ✓" : "Curated list already loaded ✓"));
 }
 
 /* ---------------- sector route ---------------- */
@@ -1237,20 +1418,30 @@ async function sectorBuildRoute(){
   order.forEach(function(pi,i){ list[pi].order = i+1; });
   list.sort(function(a,b){return (a.order||9999)-(b.order||9999);});
   // total day distance along the ordered route (OSRM meters, else haversine)
+  // + per-leg km stored on each stop for the stop list ("→ 0.4 km")
   let totalM = 0, prev = 0;
+  const legKmArr = [];
   order.forEach(function(pi){
     const mi = pi+1;
     let d;
     if(matrix && matrix[prev] && matrix[prev][mi]!=null) d = matrix[prev][mi];
     else d = hav(prev===0?start:pts[prev-1], pts[pi])*1000;
+    legKmArr.push({pi:pi, km:Math.round(d/100)/10});
     totalM += d; prev = mi;
   });
+  legKmArr.forEach(function(o){ list[o.pi].legKm = o.km; });
   db.sectorMeta = db.sectorMeta||{};
   db.sectorMeta[s.id] = { startLat:start.lat, startLon:start.lon,
     dayDistKm: Math.round(totalM/100)/10, dayStops: list.length,
     dayFirst: list[0] ? list[0].name : "" };
   save(); renderSectorDetail(); drawSectorMarkers();
   toast("Route ready — stop 1 → stop "+list.length+" 🧭");
+}
+/* "Route from my location": build the GPS-anchored nearest-first order,
+   then open Google Maps turn-by-turn for the first chunk. One tap = go. */
+async function sectorRouteFromHere(){
+  await sectorBuildRoute();
+  sectorOpenMapsChunk();
 }
 function sectorOpenMapsChunk(){
   const s = sectorById(currentSector); if(!s) return;
@@ -1264,4 +1455,150 @@ function sectorOpenMapsChunk(){
   let url = "https://www.google.com/maps/dir/?api=1&origin="+origin+"&destination="+dest+"&travelmode="+gmapsTravelMode();
   if(wp) url += "&waypoints="+encodeURIComponent(wp);
   window.open(url,"_blank");
+}
+
+/* ================= AR MODE (camera + compass navigation) =================
+   Points a big arrow at the next stop using live GPS + phone compass.
+   Honest limit: phone GPS/compass is ~5–20 m accurate — this guides you to
+   the SHOP AREA, not the exact storefront. For exact pins use per-stop Maps. */
+let arState = null;
+async function arReverseGeocode(lat, lon){
+  try{
+    const r = await fetch("https://nominatim.openstreetmap.org/reverse?format=json&lat="+lat+"&lon="+lon+"&zoom=16",
+      {headers:{"Accept":"application/json"}});
+    const d = await r.json();
+    if(d && d.address){
+      const a = d.address;
+      return a.road || a.suburb || a.neighbourhood || a.city_district || a.city || "this area";
+    }
+  }catch(e){}
+  return "this area";
+}
+function arOrderedStops(){
+  const list = sectorStops(currentSector);
+  const o = list.filter(function(p){return p.status!=="done" && typeof p.lat==="number";});
+  o.sort(function(a,b){return (a.order!=null?a.order:9999)-(b.order!=null?b.order:9999);});
+  return o;
+}
+async function openAR(){
+  const s = sectorById(currentSector); if(!s){ toast("Open a sector first"); return; }
+  const stops = arOrderedStops();
+  if(!stops.length){ toast("No pending stops in this sector"); return; }
+  // 1) camera
+  let stream = null;
+  try{
+    if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) throw new Error("no-camera");
+    stream = await navigator.mediaDevices.getUserMedia({video:{facingMode:"environment"}, audio:false});
+  }catch(e){
+    toast("Camera blocked — AR needs camera permission");
+    return;
+  }
+  // 2) compass permission (iOS asks explicitly)
+  let headingOK = true;
+  try{
+    if(typeof DeviceOrientationEvent !== "undefined" && typeof DeviceOrientationEvent.requestPermission === "function"){
+      const resp = await DeviceOrientationEvent.requestPermission();
+      if(resp !== "granted") headingOK = false;
+    }
+  }catch(e){ headingOK = false; }
+  // 3) live GPS
+  let startPos = null;
+  try{
+    startPos = await new Promise(function(res, rej){
+      navigator.geolocation.getCurrentPosition(res, rej, {enableHighAccuracy:true, timeout:10000});
+    });
+  }catch(e){
+    stream.getTracks().forEach(function(t){ t.stop(); });
+    toast("GPS blocked — AR needs location");
+    return;
+  }
+  if(!headingOK) toast("Compass unavailable — arrow won't rotate");
+
+  arState = {
+    stream:stream, s:s, stops:stops, idx:0,
+    lat:startPos.coords.latitude, lon:startPos.coords.longitude,
+    heading:null, watchId:null, tickId:null, where:"locating…"
+  };
+  document.getElementById("ar-overlay").style.display = "block";
+  const v = document.getElementById("ar-video");
+  v.srcObject = stream; v.play().catch(function(){});
+
+  window.addEventListener("deviceorientationabsolute", arOnOrient, true);
+  window.addEventListener("deviceorientation", arOnOrient, true);
+  arState.watchId = navigator.geolocation.watchPosition(function(p){
+    if(arState){ arState.lat = p.coords.latitude; arState.lon = p.coords.longitude; }
+  }, function(){}, {enableHighAccuracy:true, maximumAge:2000});
+  arReverseGeocode(arState.lat, arState.lon).then(function(w){
+    if(arState){ arState.where = w; arRender(); }
+  });
+  arState.tickId = setInterval(arRender, 500);
+  arRender();
+}
+function arOnOrient(e){
+  if(!arState) return;
+  let h = null;
+  if(typeof e.webkitCompassHeading === "number" && !isNaN(e.webkitCompassHeading)) h = e.webkitCompassHeading;
+  else if(typeof e.alpha === "number" && e.alpha !== null){
+    if(e.absolute === false) return; // relative-only sensor, unreliable
+    h = 360 - e.alpha;
+  }
+  if(h !== null) arState.heading = (h+360)%360;
+}
+function arBearingDeg(a, b){
+  const R = Math.PI/180;
+  const dLon = (b.lon-a.lon)*R, lat1 = a.lat*R, lat2 = b.lat*R;
+  const y = Math.sin(dLon)*Math.cos(lat2);
+  const x = Math.cos(lat1)*Math.sin(lat2) - Math.sin(lat1)*Math.cos(lat2)*Math.cos(dLon);
+  return (Math.atan2(y,x)/R + 360)%360;
+}
+function arRender(){
+  if(!arState) return;
+  const st = arState.stops[arState.idx];
+  if(!st){ closeAR(); return; }
+  const me = {lat:arState.lat, lon:arState.lon};
+  const dKm = hav(me, st);
+  const brg = arBearingDeg(me, st);
+  let arrowDeg = null, note = "";
+  if(arState.heading !== null) arrowDeg = brg - arState.heading;
+  else note = "🧭 compass unavailable — face the direction of travel";
+  document.getElementById("ar-where").textContent = "You are at: " + arState.where;
+  document.getElementById("ar-target").textContent = "→ " + st.name;
+  document.getElementById("ar-dist").textContent =
+    (dKm < 1 ? Math.round(dKm*1000)+" m" : dKm.toFixed(2)+" km") +
+    (note ? " · " + note : " · bearing " + Math.round(brg) + "°");
+  const arrow = document.getElementById("ar-arrow");
+  // ➤ points right at 0°, so -90 makes it point UP = "straight ahead"
+  arrow.style.transform = "rotate(" + ((arrowDeg!==null?arrowDeg:0)-90) + "deg)";
+  arrow.style.opacity = arrowDeg!==null ? "1" : "0.35";
+  if(dKm*1000 < 25) arReached(true);
+}
+function arReached(auto){
+  if(!arState) return;
+  const st = arState.stops[arState.idx];
+  if(st){
+    const list = sectorStops(currentSector);
+    const real = list.find(function(p){ return p.oid === st.oid; });
+    if(real) real.status = "done";
+    save(); renderSectorDetail(); drawSectorMarkers();
+    if(!auto) toast("✓ " + st.name);
+  }
+  arState.idx++;
+  if(arState.idx >= arState.stops.length){
+    closeAR(); toast("🎉 All stops done — sector complete!");
+    return;
+  }
+  arRender();
+}
+function closeAR(){
+  if(arState){
+    try{ arState.stream.getTracks().forEach(function(t){ t.stop(); }); }catch(e){}
+    if(arState.watchId) navigator.geolocation.clearWatch(arState.watchId);
+    if(arState.tickId) clearInterval(arState.tickId);
+    window.removeEventListener("deviceorientationabsolute", arOnOrient, true);
+    window.removeEventListener("deviceorientation", arOnOrient, true);
+    const v = document.getElementById("ar-video");
+    try{ v.pause(); v.srcObject = null; }catch(e){}
+    arState = null;
+  }
+  document.getElementById("ar-overlay").style.display = "none";
 }

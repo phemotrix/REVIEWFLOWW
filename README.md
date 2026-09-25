@@ -10,6 +10,7 @@ Mobile-first admin app + customer tap page + Cloudflare Worker backend.
 | `app.js` | Admin app logic |
 | `packs.js` | Embedded business packs (S001 Bandra West, 85 stops) |
 | `tap.html` | **Customer tap page** (NFC card opens this) |
+| `theme.css` | **The design file** — all colors, cards, buttons, both pages. To change the design, replace just this file. |
 | `template-generator.js` | Local AI review writer (Groq is only a background polisher) |
 | `sw.js` / `manifest.json` / `icon-*.png` | PWA install support |
 | `worker.js` | Cloudflare Worker backend (hardened V4) |
